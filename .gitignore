@@ -2,3 +2,47 @@ venv/
 __pycache__/
 *.pyc
 uploads/
+
+
+# Environment variables / secrets
+.env
+
+# Python virtual environments
+venv/
+venv312/
+.venv/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# IDE
+.vscode/
+
+# Temporary/debug files
+uploads/debug/
+*.log
+
+# OAuth credentials / tokens
+credentials.json
+token.pickle
+token.json
+
+# OS files
+.DS_Store
+Thumbs.db
+
+
+credentials.json
+token.pickle
+
+
+# Secrets
+.env
+credentials.json
+token.pickle
+firebase_key.json
+
+# Generated files
+generated/

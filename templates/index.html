@@ -3,15 +3,20 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Medicine Packet Analyzer</title>
+  <title>💊 Medicine Packet Analyzer</title>
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
   <div class="box">
-    <h2>Medicine Packet Analyzer</h2>
-    <p class="subtitle">Upload one medicine image — Extract name, expiry and info.</p>
+    <h2>Medicine Toolkit</h2>
+    <p class="subtitle">Analyze medicine packet images or generate an e-prescription quickly.</p>
 
-    <form id="uploadForm" method="post" enctype="multipart/form-data">
+    <div class="tabs">
+      <button id="tabAnalyzer" class="tab-button active">Medicine Packet Analyzer</button>
+      <button id="tabGenerator" class="tab-button">Prescription Generator</button>
+    </div>
+
+    <div id="analyzerTab" class="tab-content active">
       <!-- Upload button -->
       <label for="imageInput" class="upload-btn">📤 Upload / Drag Image</label>
       <input id="imageInput" type="file" name="images" accept="image/*" style="display:none">
@@ -21,7 +26,7 @@
 
       <!-- Language toggle -->
       <div class="lang-row">
-        <label for="langToggle">🌐 Language / ಭಾಷೆ</label>
+        <label for="langToggle">🌐 Language</label>
         <select id="langToggle">
           <option value="en">English</option>
           <option value="kn">ಕನ್ನಡ</option>
@@ -29,12 +34,80 @@
       </div>
 
       <!-- Extract button -->
-      <button id="submitBtn" type="button">Extract Info</button>
-    </form>
+      <button id="submitBtn" type="button" class="extract-btn">Extract Info</button>
 
-    <!-- Results -->
-    <div id="output" class="output"></div>
+      <!-- Loading -->
+      <div id="loading" class="loading" style="display:none;">
+        <p>⏳ Processing... Please wait</p>
+      </div>
+
+      <!-- Results -->
+      <div id="output" class="output"></div>
+    </div>
+
+    <div id="generatorTab" class="tab-content">
+  <div class="generator-card">
+
+    <label for="patientName">Patient Name</label>
+    <input
+      type="text"
+      id="patientName"
+      placeholder="Enter patient name"
+    >
+
+    <label for="patientAge">Age (years)</label>
+    <input
+      type="number"
+      id="patientAge"
+      min="1"
+      max="150"
+      placeholder="Enter age"
+    >
+
+    <label for="patientGender">Gender</label>
+    <select id="patientGender">
+      <option value="">Select gender</option>
+      <option value="Male">Male</option>
+      <option value="Female">Female</option>
+      <option value="Other">Other</option>
+    </select>
+
+    <label for="patientPhone">Mobile Number</label>
+    <input
+      type="tel"
+      id="patientPhone"
+      maxlength="10"
+      placeholder="Enter 10-digit mobile number"
+    >
+
+    <label for="prescriptionText">Prescription Text</label>
+    <textarea
+      id="prescriptionText"
+      placeholder="Example:
+Paracetamol 500 mg once daily for 1 week
+Dolo 650 twice daily for 3 weeks"
+    ></textarea>
+
+    <p class="hint">
+      Enter patient details above. The prescription only needs medicines.
+    </p>
+
+    <div class="generator-actions">
+      <button id="recordSpeechBtn" type="button" class="record-btn">
+        🎙️ Record Prescription
+      </button>
+
+      <button id="generateBtn" type="button" class="generate-btn">
+        Generate Prescription PDF
+      </button>
+    </div>
+
+    <p id="speechStatus" class="hint"></p>
+
+    <div id="generatorOutput" class="output"></div>
+
   </div>
+</div>
 
   <script src="/static/script.js"></script>
 </body>
