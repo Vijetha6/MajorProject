@@ -6,7 +6,19 @@ import shutil
 import json
 import logging
 import uuid
-
+from database import (
+    init_database,
+    add_medicine,
+    get_all_medicines,
+    get_medicine,
+    search_medicines,
+    update_medicine,
+    update_quantity,
+    delete_medicine,
+    get_expiring_medicines,
+    get_expired_medicines,
+    get_low_stock_medicines
+)
 import cv2
 import numpy as np
 import pandas as pd
@@ -97,7 +109,7 @@ logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-
+init_database()
 
 
 UPLOAD_FOLDER = "uploads"
@@ -2210,6 +2222,283 @@ def process_image():
         return jsonify({
             "error": str(e),
             "message": "Medicine image processing failed."
+        }), 500
+# ==================== MEDICINE INVENTORY API ====================
+
+@app.route('/add-medicine', methods=['POST'])
+def add_medicine_api():
+    data = request.get_json()
+
+    if not data or not data.get('medicine_name') or not data.get('expiry_date'):
+        return jsonify({
+            "error": "medicine_name and expiry_date are required"
+        }), 400
+
+    try:
+        quantity = int(data.get('quantity', 0))
+
+        if quantity < 0:
+            return jsonify({"error": "quantity cannot be negative"}), 400
+
+        medicine_id = add_medicine({
+            "medicine_name": data["medicine_name"],
+            "brand_name": data.get("brand_name"),
+            "generic_name": data.get("generic_name"),
+            "strength": data.get("strength"),
+            "dosage_form": data.get("dosage_form"),
+            "expiry_date": data["expiry_date"],
+            "quantity": quantity,
+            "row_number": data.get("row_number"),
+            "column_number": data.get("column_number")
+        })
+
+        return jsonify({
+            "message": "Medicine added successfully",
+            "medicine_id": medicine_id
+        }), 201
+
+    except ValueError:
+        return jsonify({"error": "quantity must be a number"}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/medicines', methods=['GET'])
+def get_medicines_api():
+    try:
+        medicines = get_all_medicines()
+
+        return jsonify({
+            "count": len(medicines),
+            "medicines": medicines
+        }), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/medicine/<int:medicine_id>', methods=['GET'])
+def get_medicine_api(medicine_id):
+    try:
+        medicine = get_medicine(medicine_id)
+
+        if not medicine:
+            return jsonify({
+                "error": "Medicine not found"
+            }), 404
+
+        return jsonify(medicine), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/search-medicine', methods=['GET'])
+def search_medicine_api():
+    search_text = request.args.get('q', '').strip()
+
+    if not search_text:
+        return jsonify({
+            "error": "Search text is required"
+        }), 400
+
+    try:
+        medicines = search_medicines(search_text)
+
+        return jsonify({
+            "count": len(medicines),
+            "medicines": medicines
+        }), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/medicine/<int:medicine_id>', methods=['PUT'])
+def update_medicine_api(medicine_id):
+    data = request.get_json()
+
+    if not data or not data.get('medicine_name') or not data.get('expiry_date'):
+        return jsonify({
+            "error": "medicine_name and expiry_date are required"
+        }), 400
+
+    try:
+        quantity = int(data.get('quantity', 0))
+
+        if quantity < 0:
+            return jsonify({"error": "quantity cannot be negative"}), 400
+
+        updated = update_medicine(medicine_id, {
+            "medicine_name": data["medicine_name"],
+            "brand_name": data.get("brand_name"),
+            "generic_name": data.get("generic_name"),
+            "strength": data.get("strength"),
+            "dosage_form": data.get("dosage_form"),
+            "expiry_date": data["expiry_date"],
+            "quantity": quantity,
+            "row_number": data.get("row_number"),
+            "column_number": data.get("column_number")
+        })
+
+        if not updated:
+            return jsonify({
+                "error": "Medicine not found"
+            }), 404
+
+        return jsonify({
+            "message": "Medicine updated successfully"
+        }), 200
+
+    except ValueError:
+        return jsonify({"error": "quantity must be a number"}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/medicine/<int:medicine_id>/quantity', methods=['PUT'])
+def update_medicine_quantity_api(medicine_id):
+    data = request.get_json()
+
+    if not data or "quantity" not in data:
+        return jsonify({
+            "error": "quantity is required"
+        }), 400
+
+    try:
+        quantity = int(data["quantity"])
+
+        if quantity < 0:
+            return jsonify({
+                "error": "quantity cannot be negative"
+            }), 400
+
+        updated = update_quantity(medicine_id, quantity)
+
+        if not updated:
+            return jsonify({
+                "error": "Medicine not found"
+            }), 404
+
+        return jsonify({
+            "message": "Quantity updated successfully",
+            "quantity": quantity
+        }), 200
+
+    except ValueError:
+        return jsonify({
+            "error": "quantity must be a number"
+        }), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/medicine/<int:medicine_id>', methods=['DELETE'])
+def delete_medicine_api(medicine_id):
+    try:
+        deleted = delete_medicine(medicine_id)
+
+        if not deleted:
+            return jsonify({
+                "error": "Medicine not found"
+            }), 404
+
+        return jsonify({
+            "message": "Medicine deleted successfully"
+        }), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+        # ==================== INVENTORY ALERT API ====================
+
+@app.route('/medicines/expiring', methods=['GET'])
+def expiring_medicines_api():
+    try:
+        days = int(request.args.get('days', 30))
+
+        if days < 0:
+            return jsonify({
+                "error": "days cannot be negative"
+            }), 400
+
+        medicines = get_expiring_medicines(days)
+
+        return jsonify({
+            "count": len(medicines),
+            "days": days,
+            "medicines": medicines
+        }), 200
+
+    except ValueError:
+        return jsonify({
+            "error": "days must be a number"
+        }), 400
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/medicines/expired', methods=['GET'])
+def expired_medicines_api():
+    try:
+        medicines = get_expired_medicines()
+
+        return jsonify({
+            "count": len(medicines),
+            "medicines": medicines
+        }), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/medicines/low-stock', methods=['GET'])
+def low_stock_medicines_api():
+    try:
+        threshold = int(request.args.get('threshold', 10))
+
+        if threshold < 0:
+            return jsonify({
+                "error": "threshold cannot be negative"
+            }), 400
+
+        medicines = get_low_stock_medicines(threshold)
+
+        return jsonify({
+            "count": len(medicines),
+            "threshold": threshold,
+            "medicines": medicines
+        }), 200
+
+    except ValueError:
+        return jsonify({
+            "error": "threshold must be a number"
+        }), 400
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+# ==================== MEDICINE LOCATION API ====================
+
+@app.route('/medicine/<int:medicine_id>/location', methods=['GET'])
+def medicine_location_api(medicine_id):
+    try:
+        medicine = get_medicine(medicine_id)
+
+        if not medicine:
+            return jsonify({
+                "error": "Medicine not found"
+            }), 404
+
+        return jsonify({
+            "medicine_id": medicine["id"],
+            "medicine_name": medicine["medicine_name"],
+            "row_number": medicine["row_number"],
+            "column_number": medicine["column_number"]
+        }), 200
+
+    except Exception as e:
+        return jsonify({
+            "error": str(e)
         }), 500
 
 if __name__ == '__main__':

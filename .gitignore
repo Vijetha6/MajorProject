@@ -46,3 +46,4 @@ firebase_key.json
 
 # Generated files
 generated/
+medicine_inventory.db

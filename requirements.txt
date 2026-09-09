@@ -5,7 +5,7 @@ pytesseract==0.3.13
 easyocr==1.7.1
 roboflow==1.1.13
 transformers==4.36.2
-torch==2.10.0
+torch==2.3.0
 torchvision==0.18.0
 requests==2.31.0
 Werkzeug==2.3.7
