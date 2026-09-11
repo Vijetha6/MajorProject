@@ -1,255 +1,1646 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="MedInfo AI-powered medicine identification and inventory system">
-  <title>MedInfo | Medicine Intelligence Dashboard</title>
-  <link rel="stylesheet" href="/static/style.css">
-</head>
-<body>
-  <div class="app-shell">
-    <header class="app-header">
-      <div class="brand-block">
-        <div class="brand-mark" aria-hidden="true">M</div>
-        <div>
-          <p class="brand-name">MedInfo</p>
-          <p class="brand-tagline">AI-Powered Medicine Identification &amp; Inventory System</p>
-        </div>
-      </div>
-      <div class="header-actions">
-        <label for="langToggle">Language</label>
-        <select id="langToggle" aria-label="Choose information language">
-          <option value="en">English</option>
-          <option value="kn">ಕನ್ನಡ</option>
-        </select>
-      </div>
-    </header>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MedInfo | Medicine Intelligence</title>
+    <style>
+      :root {
+        --navy: #10233f;
+        --blue: #2d6cdf;
+        --ink: #172033;
+        --muted: #667085;
+        --line: #e5eaf2;
+        --bg: #f5f7fb;
+        --white: #fff;
+        --amber: #b96604;
+        --red: #c83a43;
+        --green: #16885e;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--ink);
+        font:
+          15px/1.5 Inter,
+          ui-sans-serif,
+          system-ui,
+          -apple-system,
+          "Segoe UI",
+          sans-serif;
+      }
+      button,
+      input,
+      select {
+        font: inherit;
+      }
+      button {
+        cursor: pointer;
+      }
+      button:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+      }
+      .app {
+        display: grid;
+        min-height: 100vh;
+        grid-template-columns: 250px 1fr;
+      }
+      .side {
+        height: 100vh;
+        position: sticky;
+        top: 0;
+        background: var(--navy);
+        color: #dce8fa;
+        padding: 23px 15px;
+        display: flex;
+        flex-direction: column;
+      }
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 0 8px 25px;
+        border-bottom: 1px solid #ffffff22;
+      }
+      .mark {
+        display: grid;
+        place-items: center;
+        width: 36px;
+        height: 36px;
+        border-radius: 10px;
+        background: #4e92ff;
+        color: #fff;
+        font-weight: 900;
+      }
+      .brand b {
+        display: block;
+        font-size: 18px;
+        color: white;
+      }
+      .brand small {
+        color: #a9bedb;
+        font-size: 11px;
+      }
+      .nav-title {
+        margin: 25px 10px 8px;
+        color: #8da5c8;
+        text-transform: uppercase;
+        font-size: 10px;
+        letter-spacing: 0.1em;
+        font-weight: 800;
+      }
+      .nav {
+        display: grid;
+        gap: 4px;
+      }
+      .nav button {
+        border: 0;
+        border-radius: 8px;
+        background: transparent;
+        color: #c9d9f2;
+        padding: 11px;
+        text-align: left;
+        font-weight: 700;
+      }
+      .nav button:hover {
+        background: #ffffff12;
+        color: white;
+      }
+      .nav button.active {
+        background: #2872e7;
+        color: white;
+      }
+      .ico {
+        display: inline-block;
+        width: 23px;
+        text-align: center;
+      }
+      .ready {
+        margin-top: auto;
+        background: #ffffff12;
+        border-radius: 9px;
+        padding: 11px;
+        font-size: 12px;
+      }
+      .dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: #38d996;
+        display: inline-block;
+        margin-right: 7px;
+      }
+      .main {
+        min-width: 0;
+      }
+      .top {
+        height: 74px;
+        padding: 0 40px;
+        background: #fffffff0;
+        border-bottom: 1px solid var(--line);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+      .crumb {
+        font-size: 13px;
+        color: var(--muted);
+      }
+      .crumb b {
+        color: var(--ink);
+      }
+      .top select {
+        padding: 8px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: white;
+      }
+      .content {
+        max-width: 1400px;
+        margin: auto;
+        padding: 38px 40px 55px;
+      }
+      .view {
+        display: none;
+      }
+      .view.active {
+        display: block;
+        animation: fade 0.2s ease;
+      }
+      @keyframes fade {
+        from {
+          opacity: 0;
+          transform: translateY(5px);
+        }
+        to {
+          opacity: 1;
+          transform: none;
+        }
+      }
+      .heading {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-end;
+        gap: 18px;
+        margin-bottom: 25px;
+      }
+      .eyebrow {
+        margin: 0 0 5px;
+        color: var(--blue);
+        font-size: 11px;
+        letter-spacing: 0.09em;
+        text-transform: uppercase;
+        font-weight: 850;
+      }
+      .heading h1 {
+        margin: 0;
+        line-height: 1.18;
+        letter-spacing: -0.8px;
+        font-size: 30px;
+      }
+      .heading p:last-child {
+        margin: 8px 0 0;
+        color: var(--muted);
+      }
+      .btn {
+        border: 0;
+        border-radius: 8px;
+        padding: 10px 15px;
+        font-weight: 750;
+      }
+      .primary {
+        background: var(--blue);
+        color: white;
+        box-shadow: 0 6px 14px #2d6cdf30;
+      }
+      .primary:hover {
+        background: #1e54b5;
+      }
+      .secondary {
+        border: 1px solid var(--line);
+        background: white;
+        color: #35445d;
+      }
+      .danger {
+        border: 1px solid #ffd8dc;
+        background: #fff0f1;
+        color: #b92635;
+      }
+      .small {
+        font-size: 12px;
+        padding: 6px 9px;
+      }
+      .stats {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 16px;
+        margin-bottom: 21px;
+      }
+      .stat,
+      .card {
+        background: white;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        box-shadow: 0 4px 14px #1c2e4d0a;
+      }
+      .stat {
+        padding: 18px;
+      }
+      .stat div {
+        display: flex;
+        justify-content: space-between;
+        color: var(--muted);
+        font-size: 13px;
+        font-weight: 700;
+      }
+      .stat i {
+        font-style: normal;
+        background: #eaf2ff;
+        color: var(--blue);
+        padding: 4px 8px;
+        border-radius: 7px;
+      }
+      .stat strong {
+        display: block;
+        font-size: 30px;
+        margin: 8px 0 0;
+      }
+      .stat small {
+        color: var(--muted);
+      }
+      .split {
+        display: grid;
+        grid-template-columns: 1.5fr 1fr;
+        gap: 20px;
+      }
+      .pad {
+        padding: 22px;
+      }
+      .card h2 {
+        font-size: 17px;
+        margin: 0;
+      }
+      .sub {
+        color: var(--muted);
+        font-size: 13px;
+        margin: 5px 0 14px;
+      }
+      .steps {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 8px;
+        margin-top: 22px;
+        text-align: center;
+        font-size: 12px;
+        font-weight: 700;
+        color: #53627a;
+      }
+      .steps div:before {
+        content: attr(data-step);
+        display: grid;
+        place-items: center;
+        margin: 0 auto 7px;
+        width: 33px;
+        height: 33px;
+        border-radius: 50%;
+        background: #eaf2ff;
+        color: var(--blue);
+      }
+      .quick {
+        width: 100%;
+        text-align: left;
+        background: white;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 11px;
+        margin-top: 9px;
+        color: #3a4b65;
+        font-weight: 700;
+      }
+      .quick span {
+        float: right;
+        color: var(--blue);
+      }
+      .toolbar {
+        padding: 17px 20px;
+        border-bottom: 1px solid var(--line);
+        display: flex;
+        gap: 12px;
+        justify-content: space-between;
+      }
+      .search {
+        position: relative;
+        flex: 1;
+        max-width: 460px;
+      }
+      .search:before {
+        content: "⌕";
+        position: absolute;
+        left: 11px;
+        top: 5px;
+        font-size: 20px;
+        color: #75839a;
+      }
+      .search input {
+        width: 100%;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 10px 10px 10px 35px;
+        outline: 0;
+      }
+      .search input:focus,
+      .field input:focus {
+        border-color: #7da7f5;
+        box-shadow: 0 0 0 3px #e8f0ff;
+      }
+      .table-wrap {
+        overflow: auto;
+      }
+      .table {
+        border-collapse: collapse;
+        min-width: 900px;
+        width: 100%;
+        text-align: left;
+      }
+      .table th {
+        padding: 12px 14px;
+        background: #fbfcff;
+        color: var(--muted);
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+      }
+      .table td {
+        padding: 13px 14px;
+        border-top: 1px solid #edf0f5;
+        color: #394960;
+        font-size: 13px;
+      }
+      .table td:first-child {
+        font-weight: 750;
+        color: var(--ink);
+      }
+      .empty {
+        text-align: center;
+        padding: 43px !important;
+        color: var(--muted) !important;
+      }
+      .muted {
+        color: var(--muted);
+      }
+      .pill {
+        display: inline-block;
+        border-radius: 99px;
+        background: #eef4ff;
+        color: #2861bb;
+        padding: 3px 8px;
+        font-weight: 750;
+        font-size: 11px;
+      }
+      .low {
+        background: #fff4df;
+        color: #a05a00;
+      }
+      .actions {
+        display: flex;
+        gap: 5px;
+      }
+      .form-card {
+        max-width: 950px;
+      }
+      .form {
+        padding: 24px;
+      }
+      .form-grid {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 17px;
+      }
+      .field {
+        display: grid;
+        gap: 6px;
+        color: #3c4a61;
+        font-size: 13px;
+        font-weight: 700;
+      }
+      .field input {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 10px;
+        outline: 0;
+        font-weight: 500;
+      }
+      .field select {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 10px;
+        outline: 0;
+        background: white;
+        color: var(--ink);
+        font-weight: 500;
+      }
+      .form-footer {
+        display: flex;
+        justify-content: flex-end;
+        gap: 9px;
+        margin-top: 23px;
+        padding-top: 19px;
+        border-top: 1px solid var(--line);
+      }
+      .scanner {
+        display: grid;
+        grid-template-columns: 1fr 0.8fr;
+        gap: 20px;
+      }
+      .drop {
+        min-height: 210px;
+        border: 2px dashed #aac6f5;
+        border-radius: 10px;
+        background: #f8fbff;
+        display: grid;
+        place-content: center;
+        text-align: center;
+        padding: 22px;
+        cursor: pointer;
+      }
+      .drop:hover {
+        border-color: var(--blue);
+      }
+      .up {
+        font-size: 31px;
+        color: var(--blue);
+      }
+      .drop strong,
+      .drop small {
+        display: block;
+      }
+      .drop small {
+        color: var(--muted);
+        margin-top: 4px;
+      }
+      .preview {
+        max-height: 200px;
+        max-width: 100%;
+        margin-top: 15px;
+        border-radius: 8px;
+        display: none;
+      }
+      .scan-actions {
+        display: flex;
+        gap: 9px;
+        margin-top: 15px;
+      }
+      .hint {
+        font-size: 12px;
+        color: var(--muted);
+        margin-top: 12px;
+      }
+      .info li {
+        color: #53627a;
+        font-size: 13px;
+        margin: 11px;
+      }
+      .results {
+        margin-top: 20px;
+      }
+      .result {
+        padding: 21px;
+        margin-bottom: 14px;
+      }
+      .result-head {
+        display: flex;
+        justify-content: space-between;
+        gap: 10px;
+        padding-bottom: 13px;
+        border-bottom: 1px solid var(--line);
+      }
+      .result-head h2 {
+        font-size: 20px;
+      }
+      .result-head p {
+        margin: 3px 0 0;
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .details,
+      .lists {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 12px;
+        margin-top: 16px;
+      }
+      .detail {
+        background: #f8faff;
+        border-radius: 7px;
+        padding: 10px;
+      }
+      .detail small {
+        display: block;
+        color: var(--muted);
+        font-size: 10px;
+      }
+      .detail b {
+        font-size: 13px;
+      }
+      .lists h3 {
+        font-size: 13px;
+        margin: 0 0 7px;
+      }
+      .lists ul {
+        padding-left: 18px;
+        margin: 0;
+        color: #59687e;
+        font-size: 12px;
+      }
+      .lists li {
+        margin: 5px;
+      }
+      .locator {
+        display: grid;
+        grid-template-columns: 0.85fr 1.15fr;
+        gap: 20px;
+      }
+      .loc-search,
+      .shelf-card {
+        padding: 22px;
+      }
+      .match {
+        padding: 13px 0;
+        border-bottom: 1px solid #edf0f5;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 8px;
+      }
+      .match b,
+      .match span {
+        display: block;
+      }
+      .match span {
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .loc-result {
+        display: none;
+        margin-top: 17px;
+        padding: 15px;
+        background: #f4f8ff;
+        border-radius: 9px;
+      }
+      .loc-result.show {
+        display: block;
+      }
+      .loc-result h3 {
+        margin: 0;
+      }
+      .shelf-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+      .shelf {
+        display: grid;
+        grid-template-columns: repeat(6, 1fr);
+        gap: 8px;
+        margin-top: 18px;
+      }
+      .slot {
+        height: 65px;
+        border-radius: 8px;
+        border: 1px solid #dce3ef;
+        background: #f8faff;
+        padding: 7px;
+        display: flex;
+        align-items: end;
+        font-size: 11px;
+        color: #75839a;
+      }
+      .slot.active {
+        background: #dceaff;
+        border: 2px solid var(--blue);
+        color: #174c9d;
+        font-weight: 800;
+      }
+      .legend {
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .alert-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 20px;
+      }
+      .alert-row {
+        padding: 13px 20px;
+        border-bottom: 1px solid #edf0f5;
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+      }
+      .alert-row b,
+      .alert-row span {
+        display: block;
+      }
+      .alert-row span {
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .toastbox {
+        position: fixed;
+        right: 20px;
+        bottom: 20px;
+        z-index: 9;
+      }
+      .toast {
+        margin-top: 8px;
+        background: #182842;
+        color: white;
+        padding: 12px 15px;
+        border-radius: 9px;
+        box-shadow: 0 10px 25px #0d1b303a;
+        font-size: 13px;
+      }
+      .toast.error {
+        background: #a32d38;
+      }
+      @media (max-width: 1000px) {
+        .app {
+          grid-template-columns: 72px 1fr;
+        }
+        .side {
+          padding: 18px 9px;
+        }
+        .brand div:not(.mark),
+        .nav-title,
+        .nav span:not(.ico),
+        .ready {
+          display: none;
+        }
+        .brand {
+          justify-content: center;
+        }
+        .nav button {
+          text-align: center;
+        }
+        .top,
+        .content {
+          padding-left: 25px;
+          padding-right: 25px;
+        }
+        .stats {
+          grid-template-columns: repeat(2, 1fr);
+        }
+        .split,
+        .scanner,
+        .locator {
+          grid-template-columns: 1fr;
+        }
+      }
+      @media (max-width: 620px) {
+        .app {
+          display: block;
+        }
+        .side {
+          height: auto;
+          position: static;
+          padding: 10px;
+        }
+        .brand {
+          display: none;
+        }
+        .nav {
+          grid-template-columns: repeat(3, 1fr);
+        }
+        .nav button {
+          font-size: 0;
+          padding: 9px;
+        }
+        .nav .ico {
+          font-size: 17px;
+        }
+        .top {
+          height: 57px;
+          padding: 0 15px;
+        }
+        .top label {
+          display: none;
+        }
+        .content {
+          padding: 25px 15px;
+        }
+        .heading {
+          display: block;
+        }
+        .heading .btn {
+          margin-top: 15px;
+        }
+        .heading h1 {
+          font-size: 26px;
+        }
+        .stats,
+        .split,
+        .alert-grid,
+        .form-grid,
+        .details,
+        .lists {
+          grid-template-columns: 1fr;
+        }
+        .steps {
+          font-size: 10px;
+        }
+        .toolbar {
+          display: block;
+        }
+        .toolbar .btn {
+          margin-top: 10px;
+        }
+        .search {
+          max-width: none;
+        }
+        .shelf {
+          grid-template-columns: repeat(4, 1fr);
+        }
+      }
 
-    <div class="app-layout">
-      <aside class="sidebar" aria-label="Primary navigation">
-        <div class="sidebar-heading">Workspace</div>
-        <nav class="main-nav">
-          <button class="nav-item active" type="button" data-section="dashboardSection">Dashboard</button>
-          <button class="nav-item" type="button" data-section="scanSection">Scan Medicine</button>
-          <button class="nav-item" type="button" data-section="inventorySection">Inventory</button>
-          <button class="nav-item" type="button" data-section="addMedicineSection">Add Medicine</button>
-          <button class="nav-item" type="button" data-section="alertsSection">Expiry Alerts</button>
-          <button class="nav-item" type="button" data-section="lowStockSection">Low Stock</button>
+      /* Visual refinement layer */
+      :root {
+        --blue-deep: #174baf;
+        --blue-soft: #edf4ff;
+        --navy-soft: #19355d;
+        --shadow-card: 0 10px 28px rgba(21, 43, 78, 0.07);
+      }
+      body {
+        background:
+          radial-gradient(circle at 92% 0%, #e6f0ff 0, transparent 29rem),
+          linear-gradient(135deg, #f8faff 0%, #f4f7fb 52%, #eef4fc 100%);
+      }
+      .side {
+        background:
+          radial-gradient(circle at 18% 8%, #2a548c 0, transparent 17rem),
+          linear-gradient(175deg, #10233f 0%, #0b1b32 100%);
+        box-shadow: 10px 0 30px rgba(10, 28, 55, 0.08);
+      }
+      .mark {
+        background: linear-gradient(145deg, #67abff, #2b6fe5);
+        box-shadow: 0 7px 16px rgba(53, 124, 239, 0.35), inset 0 1px #ffffff66;
+      }
+      .nav button {
+        position: relative;
+        transition: background 160ms ease, color 160ms ease, transform 160ms ease;
+      }
+      .nav button:hover {
+        transform: translateX(3px);
+      }
+      .nav button.active {
+        background: linear-gradient(100deg, #2872e7, #3d84ef);
+        box-shadow: 0 7px 18px rgba(0, 0, 0, 0.18);
+      }
+      .nav button.active::before {
+        content: "";
+        position: absolute;
+        left: -15px;
+        width: 3px;
+        height: 22px;
+        border-radius: 0 4px 4px 0;
+        background: #8dc0ff;
+      }
+      .ready {
+        border: 1px solid #ffffff12;
+        background: linear-gradient(135deg, #ffffff12, #ffffff08);
+      }
+      .top {
+        position: sticky;
+        top: 0;
+        z-index: 4;
+        background: rgba(255, 255, 255, 0.82);
+        backdrop-filter: blur(14px);
+      }
+      .top select,
+      .field input,
+      .search input {
+        transition: border-color 160ms ease, box-shadow 160ms ease, background 160ms ease;
+      }
+      .top select:hover {
+        border-color: #a9c7fb;
+      }
+      .heading h1 {
+        background: linear-gradient(120deg, #172033 25%, #2b61ba 100%);
+        -webkit-background-clip: text;
+        background-clip: text;
+        color: transparent;
+      }
+      .btn {
+        transition: transform 160ms ease, box-shadow 160ms ease, background 160ms ease;
+      }
+      .btn:hover:not(:disabled) {
+        transform: translateY(-1px);
+      }
+      .primary:hover {
+        box-shadow: 0 10px 18px rgba(45, 108, 223, 0.27);
+      }
+      .secondary:hover {
+        border-color: #afc8f4;
+        background: #f7faff;
+      }
+      .stat,
+      .card {
+        box-shadow: var(--shadow-card);
+      }
+      .stat {
+        position: relative;
+        overflow: hidden;
+      }
+      .stat::after {
+        content: "";
+        position: absolute;
+        inset: auto 0 0;
+        height: 3px;
+        background: linear-gradient(90deg, #2d6cdf, #83b4ff);
+      }
+      .stat:nth-child(2)::after {
+        background: linear-gradient(90deg, #e28d1d, #ffd184);
+      }
+      .stat:nth-child(3)::after {
+        background: linear-gradient(90deg, #dc5360, #ff9ca4);
+      }
+      .stat:nth-child(4)::after {
+        background: linear-gradient(90deg, #1b9b6b, #73d8ae);
+      }
+      .stat:hover,
+      .card:hover {
+        border-color: #d7e2f4;
+      }
+      .steps div::before {
+        box-shadow: inset 0 0 0 1px #cfe0fa, 0 4px 10px #2d6cdf14;
+      }
+      .quick {
+        transition: transform 160ms ease, border-color 160ms ease, background 160ms ease;
+      }
+      .quick:hover {
+        transform: translateX(3px);
+        border-color: #b7cff5;
+        background: #f8fbff;
+      }
+      .table th {
+        border-bottom: 1px solid #e8eef7;
+      }
+      .table tbody tr {
+        transition: background 130ms ease;
+      }
+      .table tbody tr:hover {
+        background: #f8fbff;
+      }
+      .pill {
+        border: 1px solid #d7e6ff;
+      }
+      .low {
+        border-color: #ffe0ab;
+      }
+      .drop {
+        background: linear-gradient(145deg, #fbfdff, #f1f7ff);
+        transition: border-color 160ms ease, transform 160ms ease, box-shadow 160ms ease;
+      }
+      .drop:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 10px 24px rgba(45, 108, 223, 0.1);
+      }
+      .slot {
+        transition: transform 150ms ease, border-color 150ms ease, background 150ms ease;
+      }
+      .slot:hover {
+        transform: scale(1.03);
+        border-color: #afc8f4;
+      }
+      .slot.active {
+        box-shadow: 0 8px 15px rgba(45, 108, 223, 0.16);
+      }
+      .toast {
+        border: 1px solid #ffffff25;
+        animation: toast-in 200ms ease;
+      }
+      @keyframes toast-in {
+        from { opacity: 0; transform: translateY(8px); }
+        to { opacity: 1; transform: translateY(0); }
+      }
+      button:focus-visible,
+      input:focus-visible,
+      textarea:focus-visible,
+      select:focus-visible {
+        outline: 3px solid #91b9ff;
+        outline-offset: 2px;
+      }
+      textarea {
+        min-height: 180px;
+        resize: vertical;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 11px;
+        color: var(--ink);
+        font: inherit;
+        line-height: 1.55;
+      }
+      .prescription-layout {
+        display: grid;
+        grid-template-columns: minmax(0, 1.45fr) minmax(260px, 0.75fr);
+        gap: 20px;
+      }
+      .prescription-layout .form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .textarea-field { grid-column: 1 / -1; }
+      .sms-note { display: flex; gap: 11px; align-items: flex-start; padding: 14px; border: 1px solid #cdebdc; border-radius: 9px; background: #f0fcf6; color: #236548; font-size: 13px; }
+      .sms-note strong, .delivery strong { display: block; }
+      .prescription-help { display: grid; gap: 14px; }
+      .prescription-help .card { padding: 20px; }
+      .prescription-help ol { margin: 14px 0 0; padding-left: 20px; color: #56657b; font-size: 13px; }
+      .prescription-help li { margin: 9px 0; }
+      .delivery { margin-top: 18px; padding: 16px; border: 1px solid #d5e4fb; border-radius: 10px; background: #f6f9ff; }
+      .delivery.success { border-color: #cdebdc; background: #f0fcf6; color: #236548; }
+      .delivery.warning { border-color: #ffe2a9; background: #fff9ec; color: #86540e; }
+      .delivery a { display: inline-block; margin-top: 10px; color: var(--blue-deep); font-weight: 750; }
+      @media (max-width: 1000px) { .prescription-layout { grid-template-columns: 1fr; } }
+      @media (max-width: 620px) { .prescription-layout .form-grid { grid-template-columns: 1fr; } }
+    </style>
+  </head>
+  <body>
+    <div class="app">
+      <aside class="side">
+        <div class="brand">
+          <div class="mark">M</div>
+          <div><b>MedInfo</b><small>Medicine intelligence</small></div>
+        </div>
+        <p class="nav-title">Workspace</p>
+        <nav class="nav">
+          <button class="active" data-view="dashboard">
+            <span class="ico">⌂</span><span>Dashboard</span></button
+          ><button data-view="scan">
+            <span class="ico">⌁</span><span>Scan medicine</span></button
+          ><button data-view="inventory">
+            <span class="ico">▤</span><span>Inventory</span></button
+          ><button data-view="location">
+            <span class="ico">⌖</span><span>Find location</span></button
+          ><button data-view="add">
+            <span class="ico">＋</span><span>Add medicine</span></button
+          ><button data-view="alerts">
+            <span class="ico">◷</span><span>Expiry alerts</span>
+          </button>
+          <button data-view="prescription">
+            <span class="ico">Rx</span><span>Prescription</span>
+          </button>
         </nav>
-        <div class="sidebar-footer">
-          <span class="status-dot" aria-hidden="true"></span>
-          <span>System ready</span>
-        </div>
+        <div class="ready"><i class="dot"></i>Inventory system ready</div>
       </aside>
-
-      <main class="main-content">
-        <button id="tabGenerator" class="legacy-tab-control" type="button" hidden>Prescription Generator</button>
-        <section id="dashboardSection" class="page-section active-section" aria-labelledby="dashboardTitle">
-          <div class="section-heading">
-            <div>
-              <p class="eyebrow">Overview</p>
-              <h1 id="dashboardTitle">Good day, welcome to MedInfo</h1>
-              <p class="section-description">Monitor medicine identification and stock activity from one place.</p>
-            </div>
-            <button class="secondary-button" type="button" data-section-target="scanSection">Scan a medicine</button>
+      <main class="main">
+        <header class="top">
+          <div class="crumb">
+            <b id="pageName">Dashboard</b> / MedInfo workspace
           </div>
-
-          <div id="dashboardStats" class="stats-grid">
-            <article class="stat-card stat-card-blue">
-              <span class="stat-label">Total Medicines</span>
-              <strong id="totalMedicinesStat" class="stat-value">--</strong>
-              <span class="stat-note">Items in inventory</span>
-            </article>
-            <article class="stat-card stat-card-amber">
-              <span class="stat-label">Expiring Soon</span>
-              <strong id="expiringSoonStat" class="stat-value">--</strong>
-              <span class="stat-note">Within 30 days</span>
-            </article>
-            <article class="stat-card stat-card-red">
-              <span class="stat-label">Expired</span>
-              <strong id="expiredStat" class="stat-value">--</strong>
-              <span class="stat-note">Needs attention</span>
-            </article>
-            <article class="stat-card stat-card-green">
-              <span class="stat-label">Low Stock</span>
-              <strong id="lowStockStat" class="stat-value">--</strong>
-              <span class="stat-note">Below threshold</span>
-            </article>
-          </div>
-
-          <div class="dashboard-grid">
-            <article class="content-card workflow-card">
-              <div class="card-heading">
-                <div>
-                  <p class="eyebrow">Core workflow</p>
-                  <h2>From image to insight</h2>
-                </div>
-              </div>
-              <div class="workflow-steps">
-                <span>Upload image</span><span>AI processing</span><span>Medicine detection</span><span>Inventory action</span>
-              </div>
-            </article>
-            <article class="content-card quick-card">
-              <p class="eyebrow">Quick actions</p>
-              <h2>What would you like to do?</h2>
-              <div class="quick-actions">
-                <button class="quick-action" type="button" data-section-target="scanSection">Scan image</button>
-                <button class="quick-action" type="button" data-section-target="addMedicineSection">Add stock</button>
-                <button class="quick-action" type="button" data-section-target="inventorySection">View inventory</button>
-              </div>
-            </article>
-          </div>
-        </section>
-
-        <section id="scanSection" class="page-section" aria-labelledby="scanTitle">
-          <button id="tabAnalyzer" class="legacy-tab-control" type="button" hidden>Scan Medicine</button>
-          <div id="analyzerTab" class="tab-content active">
-          <div class="section-heading">
-            <div>
-              <p class="eyebrow">AI scanner</p>
-              <h1 id="scanTitle">Identify a medicine</h1>
-              <p class="section-description">Upload one or more clear package images for OCR, expiry detection, and medicine information.</p>
-            </div>
-          </div>
-
-          <div class="scanner-layout">
-            <article class="content-card scanner-card">
-              <label for="imageInput" class="upload-zone upload-btn">
-                <span class="upload-icon" aria-hidden="true">+</span>
-                <span class="upload-title">Upload medicine images</span>
-                <span class="upload-help">PNG, JPG, or JPEG. Multiple images supported.</span>
-              </label>
-              <input id="imageInput" type="file" name="images" accept="image/*" multiple hidden>
-              <div id="previewContainer" class="preview-container" aria-live="polite">
-                <img id="preview" alt="Selected medicine image preview" class="upload-preview" hidden>
-              </div>
-              <button id="submitBtn" type="button" class="primary-button extract-btn">Scan Medicine</button>
-              <div id="loading" class="loading" hidden aria-live="polite">
-                <span class="spinner" aria-hidden="true"></span>
-                <p>Processing image(s). This may take a moment.</p>
-              </div>
-            </article>
-
-            <article class="content-card scanner-info-card">
-              <p class="eyebrow">Detection pipeline</p>
-              <h2>What MedInfo checks</h2>
-              <ul class="feature-list">
-                <li>Medicine name with YOLO and OCR</li>
-                <li>Expiry date from package text</li>
-                <li>AI-generated medicine information</li>
-                <li>English or Kannada response</li>
-              </ul>
-            </article>
-          </div>
-
-          <div id="output" class="results-container output" aria-live="polite">
-            <div class="empty-state results-empty-state">
-              <h2>Medicine results will appear here</h2>
-              <p>Scan a medicine image to view identification details.</p>
-            </div>
-          </div>
-
-          <article id="medicineResultTemplate" class="content-card medicine-result-card" hidden>
-            <div class="result-header">
+          <label
+            >Language
+            <select id="language">
+              <option value="en">English</option>
+              <option value="kn">ಕನ್ನಡ</option>
+            </select></label
+          >
+        </header>
+        <div class="content">
+          <section class="view active" id="dashboard">
+            <div class="heading">
               <div>
-                <p class="eyebrow">Detection result</p>
-                <h2 class="result-medicine-name">Medicine information</h2>
+                <p class="eyebrow">Overview</p>
+                <h1>Medicine management, made clearer.</h1>
+                <p>
+                  Identify medicine packages, manage stock, and locate items
+                  from one workspace.
+                </p>
               </div>
-              <span class="result-source">Source: <strong class="result-source-value">--</strong></span>
+              <button class="btn primary" data-go="scan">
+                Scan a medicine
+              </button>
             </div>
-            <div class="result-fields">
-              <div class="result-field"><span>Brand Name</span><strong class="result-brand-name">Information not available</strong></div>
-              <div class="result-field"><span>Generic Name</span><strong class="result-generic-name">Information not available</strong></div>
-              <div class="result-field"><span>Strength</span><strong class="result-strength">Information not available</strong></div>
-              <div class="result-field"><span>Dosage Form</span><strong class="result-dosage-form">Information not available</strong></div>
-              <div class="result-field result-field-expiry"><span>Expiry Date</span><strong class="result-expiry-date">NOT FOUND</strong></div>
+            <div class="stats">
+              <article class="stat">
+                <div>Total medicines<i>▤</i></div>
+                <strong id="total">—</strong><small>Items in inventory</small>
+              </article>
+              <article class="stat">
+                <div>Expiring soon<i>◷</i></div>
+                <strong id="expiring">—</strong><small>Within 30 days</small>
+              </article>
+              <article class="stat">
+                <div>Expired<i>!</i></div>
+                <strong id="expired">—</strong><small>Needs attention</small>
+              </article>
+              <article class="stat">
+                <div>Low stock<i>↓</i></div>
+                <strong id="low">—</strong><small>10 units or fewer</small>
+              </article>
             </div>
-            <div class="result-lists">
-              <div><h3>Uses</h3><ul class="result-uses"><li>Information not available</li></ul></div>
-              <div><h3>Side Effects</h3><ul class="result-side-effects"><li>Information not available</li></ul></div>
-              <div><h3>Alternative Medicines</h3><ul class="result-alternatives"><li>Information not available</li></ul></div>
+            <div class="split">
+              <article class="card pad">
+                <p class="eyebrow">Core workflow</p>
+                <h2>From package image to shelf location</h2>
+                <p class="sub">
+                  MedInfo brings identification and storage data together.
+                </p>
+                <div class="steps">
+                  <div data-step="1">Upload package</div>
+                  <div data-step="2">AI identifies it</div>
+                  <div data-step="3">Save inventory</div>
+                  <div data-step="4">Find on shelf</div>
+                </div>
+              </article>
+              <article class="card pad">
+                <p class="eyebrow">Quick actions</p>
+                <h2>Get started</h2>
+                <button class="quick" data-go="scan">
+                  Scan package <span>→</span></button
+                ><button class="quick" data-go="add">
+                  Add stock record <span>→</span></button
+                ><button class="quick" data-go="location">
+                  Find a medicine <span>→</span>
+                </button>
+              </article>
             </div>
-          </article>
-          </div>
-        </section>
-
-        <section id="inventorySection" class="page-section" aria-labelledby="inventoryTitle">
-          <div class="section-heading">
-            <div><p class="eyebrow">Stock management</p><h1 id="inventoryTitle">Medicine inventory</h1><p class="section-description">Search, review, and manage medicines stored in your inventory.</p></div>
-            <button class="primary-button" type="button" data-section-target="addMedicineSection">Add medicine</button>
-          </div>
-          <article class="content-card table-card">
-            <div class="table-toolbar">
-              <label class="search-field" for="inventorySearch"><span>Search inventory</span><input id="inventorySearch" type="search" placeholder="Search by medicine, brand, or generic name"></label>
-              <div class="table-actions"><button id="inventoryRefreshBtn" class="secondary-button" type="button">Refresh</button></div>
-            </div>
-            <div class="table-wrapper">
-              <table id="inventoryTable"><thead><tr><th>ID</th><th>Medicine Name</th><th>Brand Name</th><th>Generic Name</th><th>Strength</th><th>Dosage Form</th><th>Expiry Date</th><th>Quantity</th><th>Row</th><th>Column</th><th>Actions</th></tr></thead><tbody id="inventoryTableBody"><tr><td colspan="11" class="table-empty">Inventory records will appear here.</td></tr></tbody></table>
-            </div>
-          </article>
-        </section>
-
-        <section id="addMedicineSection" class="page-section" aria-labelledby="addMedicineTitle">
-          <div class="section-heading"><div><p class="eyebrow">Inventory entry</p><h1 id="addMedicineTitle">Add medicine</h1><p class="section-description">Record medicine details and its storage location.</p></div></div>
-          <article class="content-card form-card">
-            <form id="addMedicineForm">
-              <div class="form-grid">
-                <label>Medicine Name<input id="medicineNameInput" name="medicine_name" type="text" required></label>
-                <label>Brand Name<input id="brandNameInput" name="brand_name" type="text"></label>
-                <label>Generic Name<input id="genericNameInput" name="generic_name" type="text"></label>
-                <label>Strength<input id="strengthInput" name="strength" type="text" placeholder="e.g. 500 mg"></label>
-                <label>Dosage Form<input id="dosageFormInput" name="dosage_form" type="text" placeholder="e.g. Tablet"></label>
-                <label>Expiry Date<input id="expiryDateInput" name="expiry_date" type="date" required></label>
-                <label>Quantity<input id="quantityInput" name="quantity" type="number" min="0" value="0"></label>
-                <label>Row Number<input id="rowNumberInput" name="row_number" type="number" min="0"></label>
-                <label>Column Number<input id="columnNumberInput" name="column_number" type="number" min="0"></label>
+          </section>
+          <section class="view" id="scan">
+            <div class="heading">
+              <div>
+                <p class="eyebrow">AI scanner</p>
+                <h1>Identify a medicine package</h1>
+                <p>
+                  Upload clear package images for OCR, expiry detection, and
+                  medicine information.
+                </p>
               </div>
-              <button id="addMedicineSubmitBtn" class="primary-button" type="submit">Save medicine</button>
-            </form>
-          </article>
-        </section>
-
-        <section id="alertsSection" class="page-section" aria-labelledby="alertsTitle">
-          <div class="section-heading"><div><p class="eyebrow">Safety monitoring</p><h1 id="alertsTitle">Expiry alerts</h1><p class="section-description">Review medicines that need attention before they become unsafe to use.</p></div></div>
-          <div class="alert-grid">
-            <article class="content-card alert-card"><div class="card-heading"><h2>Expiring soon</h2><span class="alert-count" id="expiringCount">--</span></div><div id="expiringList" class="alert-list"><div class="empty-state">Expiring medicines will appear here.</div></div></article>
-            <article class="content-card alert-card alert-card-danger"><div class="card-heading"><h2>Expired medicines</h2><span class="alert-count" id="expiredCount">--</span></div><div id="expiredList" class="alert-list"><div class="empty-state">Expired medicines will appear here.</div></div></article>
-          </div>
-        </section>
-
-        <section id="lowStockSection" class="page-section" aria-labelledby="lowStockTitle">
-          <div class="section-heading"><div><p class="eyebrow">Stock monitoring</p><h1 id="lowStockTitle">Low-stock medicines</h1><p class="section-description">Find medicines that may need replenishment.</p></div></div>
-          <article class="content-card table-card"><div class="table-toolbar"><div><h2>Replenishment list</h2><p class="table-note">Default threshold: 10 units</p></div><span class="alert-count" id="lowStockCount">--</span></div><div class="table-wrapper"><table id="lowStockTable"><thead><tr><th>Medicine Name</th><th>Quantity</th><th>Location</th><th>Expiry Date</th></tr></thead><tbody id="lowStockTableBody"><tr><td colspan="4" class="table-empty">Low-stock records will appear here.</td></tr></tbody></table></div></article>
-        </section>
-
-        <section id="generatorTab" class="page-section prescription-section" aria-labelledby="prescriptionTitle">
-          <div class="section-heading"><div><p class="eyebrow">Patient care</p><h1 id="prescriptionTitle">Prescription generator</h1><p class="section-description">Create and share a digitally generated prescription.</p></div></div>
-          <article class="content-card generator-card">
-            <label for="patientName">Patient Name</label><input type="text" id="patientName" placeholder="Enter patient name">
-            <label for="patientAge">Age (years)</label><input type="number" id="patientAge" min="1" max="150" placeholder="Enter age">
-            <label for="patientGender">Gender</label><select id="patientGender"><option value="">Select gender</option><option value="Male">Male</option><option value="Female">Female</option><option value="Other">Other</option></select>
-            <label for="patientPhone">Mobile Number</label><input type="tel" id="patientPhone" maxlength="10" placeholder="Enter 10-digit mobile number">
-            <label for="prescriptionText">Prescription Text</label><textarea id="prescriptionText" placeholder="Example:
-Paracetamol 500 mg once daily for 1 week
-Dolo 650 twice daily for 3 weeks"></textarea>
-            <p class="hint">Enter patient details above. The prescription only needs medicines.</p>
-            <div class="generator-actions"><button id="recordSpeechBtn" type="button" class="record-btn">Record Prescription</button><button id="generateBtn" type="button" class="generate-btn">Generate Prescription PDF</button></div>
-            <p id="speechStatus" class="hint" aria-live="polite"></p>
-            <div id="generatorOutput" class="output" aria-live="polite"></div>
-          </article>
-        </section>
+            </div>
+            <div class="scanner">
+              <article class="card pad">
+                <label class="drop" for="imageInput"
+                  ><div class="up">↑</div>
+                  <strong>Choose medicine images</strong
+                  ><small>PNG, JPG or JPEG · Multiple images supported</small
+                  ><input
+                    id="imageInput"
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    hidden /></label
+                ><img class="preview" id="preview" alt="Medicine preview" />
+                <div class="scan-actions">
+                  <button id="scanBtn" class="btn primary">Scan medicine</button
+                  ><button id="clearImage" class="btn secondary">Clear</button>
+                </div>
+                <div id="scanStatus" class="hint" aria-live="polite"></div>
+              </article>
+              <article class="card pad info">
+                <p class="eyebrow">Detection pipeline</p>
+                <h2>What MedInfo checks</h2>
+                <ul>
+                  <li>Medicine name using package OCR</li>
+                  <li>Expiry date from package text</li>
+                  <li>Generic name, strength, and dosage form</li>
+                  <li>Uses, side effects, and alternatives</li>
+                </ul>
+              </article>
+            </div>
+            <div class="results" id="results"></div>
+          </section>
+          <section class="view" id="prescription">
+            <div class="heading">
+              <div>
+                <p class="eyebrow">Patient care</p>
+                <h1>Create and send a prescription</h1>
+                <p>
+                  Generate a PDF prescription and automatically send its secure
+                  download link by SMS to the patient.
+                </p>
+              </div>
+            </div>
+            <div class="prescription-layout">
+              <article class="card">
+                <form class="form" id="prescriptionForm">
+                  <div class="form-grid">
+                    <label class="field">Patient name *<input name="patient_name" required placeholder="Enter patient name" /></label>
+                    <label class="field">Age *<input name="age" type="number" min="1" max="150" required placeholder="Enter age" /></label>
+                    <label class="field">Gender *<select name="gender" required><option value="">Select gender</option><option>Female</option><option>Male</option><option>Other</option></select></label>
+                    <label class="field">Mobile number *<input name="phone_number" type="tel" inputmode="numeric" pattern="[6-9][0-9]{9}" maxlength="10" required placeholder="10-digit Indian mobile number" /></label>
+                    <label class="field textarea-field">Prescription text *<textarea name="text" required placeholder="Example:\nParacetamol 500 mg once daily for 5 days\nCetirizine 10 mg once daily for 3 days"></textarea></label>
+                  </div>
+                  <div class="sms-note"><span>SMS</span><div><strong>Automatic patient delivery</strong>Once the PDF is generated and uploaded, MedInfo sends the download link to the mobile number above.</div></div>
+                  <div class="form-footer"><button type="reset" class="btn secondary">Clear</button><button id="generatePrescriptionBtn" class="btn primary" type="submit">Generate PDF &amp; send SMS</button></div>
+                  <div id="prescriptionResult" aria-live="polite"></div>
+                </form>
+              </article>
+              <aside class="prescription-help">
+                <article class="card"><p class="eyebrow">How it works</p><h2>Prescription delivery</h2><ol><li>Enter patient details and medicine instructions.</li><li>MedInfo creates a signed prescription PDF.</li><li>The PDF is uploaded and an SMS link is sent to the patient.</li></ol></article>
+                <article class="card"><p class="eyebrow">Writing guide</p><h2>Include dosage details</h2><p class="sub">Use one medicine per line. Include strength, frequency, and duration where available.</p></article>
+              </aside>
+            </div>
+          </section>
+          <section class="view" id="inventory">
+            <div class="heading">
+              <div>
+                <p class="eyebrow">Stock management</p>
+                <h1>Medicine inventory</h1>
+                <p>Search, review, and manage your stored medicine records.</p>
+              </div>
+              <button class="btn primary" data-go="add">Add medicine</button>
+            </div>
+            <article class="card">
+              <div class="toolbar">
+                <div class="search">
+                  <input
+                    id="inventorySearch"
+                    type="search"
+                    placeholder="Search medicine, brand, or generic name"
+                  />
+                </div>
+                <button id="refreshInventory" class="btn secondary">
+                  Refresh
+                </button>
+              </div>
+              <div class="table-wrap">
+                <table class="table">
+                  <thead>
+                    <tr>
+                      <th>Medicine</th>
+                      <th>Brand / Generic</th>
+                      <th>Strength</th>
+                      <th>Expiry</th>
+                      <th>Quantity</th>
+                      <th>Location</th>
+                      <th>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody id="inventoryBody">
+                    <tr>
+                      <td class="empty" colspan="7">Loading inventory…</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </article>
+          </section>
+          <section class="view" id="location">
+            <div class="heading">
+              <div>
+                <p class="eyebrow">Medicine locator</p>
+                <h1>Find a medicine on the shelf</h1>
+                <p>
+                  Search by medicine, brand, or generic name, then reveal its
+                  saved row and column.
+                </p>
+              </div>
+            </div>
+            <div class="locator">
+              <article class="card loc-search">
+                <label class="field"
+                  >Search inventory<input
+                    id="locationSearch"
+                    type="search"
+                    placeholder="e.g. Paracetamol"
+                /></label>
+                <div id="matches"></div>
+                <div class="loc-result" id="locResult">
+                  <p class="eyebrow">Storage position</p>
+                  <h3 id="locName">—</h3>
+                  <p class="sub">
+                    Row <b id="locRow">—</b> · Column <b id="locColumn">—</b>
+                  </p>
+                </div>
+              </article>
+              <article class="card shelf-card">
+                <div class="shelf-head">
+                  <div>
+                    <h2>Shelf map</h2>
+                    <p class="sub">Rows 1–6 · Columns 1–6</p>
+                  </div>
+                  <span id="mapLabel" class="pill">No selection</span>
+                </div>
+                <div class="shelf" id="shelf"></div>
+                <p class="legend">
+                  The selected stored location is highlighted. Enter numbers for
+                  row and column when adding a medicine.
+                </p>
+              </article>
+            </div>
+          </section>
+          <section class="view" id="add">
+            <div class="heading">
+              <div>
+                <p class="eyebrow">Inventory entry</p>
+                <h1>Add a medicine</h1>
+                <p>Record package details and its physical storage location.</p>
+              </div>
+            </div>
+            <article class="card form-card">
+              <form class="form" id="medicineForm">
+                <div class="form-grid">
+                  <label class="field"
+                    >Medicine name *<input
+                      name="medicine_name"
+                      required
+                      placeholder="e.g. Paracetamol" /></label
+                  ><label class="field"
+                    >Brand name<input
+                      name="brand_name"
+                      placeholder="e.g. Crocin" /></label
+                  ><label class="field"
+                    >Generic name<input
+                      name="generic_name"
+                      placeholder="e.g. Acetaminophen" /></label
+                  ><label class="field"
+                    >Strength<input
+                      name="strength"
+                      placeholder="e.g. 500 mg" /></label
+                  ><label class="field"
+                    >Dosage form<input
+                      name="dosage_form"
+                      placeholder="e.g. Tablet" /></label
+                  ><label class="field"
+                    >Expiry date *<input
+                      name="expiry_date"
+                      type="date"
+                      required /></label
+                  ><label class="field"
+                    >Quantity<input
+                      name="quantity"
+                      type="number"
+                      min="0"
+                      value="0"
+                      required /></label
+                  ><label class="field"
+                    >Row number<input
+                      name="row_number"
+                      type="number"
+                      min="0"
+                      placeholder="e.g. 2" /></label
+                  ><label class="field"
+                    >Column number<input
+                      name="column_number"
+                      type="number"
+                      min="0"
+                      placeholder="e.g. 5"
+                  /></label>
+                </div>
+                <div class="form-footer">
+                  <button class="btn secondary" type="reset">Clear</button
+                  ><button class="btn primary" type="submit">
+                    Save medicine
+                  </button>
+                </div>
+              </form>
+            </article>
+          </section>
+          <section class="view" id="alerts">
+            <div class="heading">
+              <div>
+                <p class="eyebrow">Safety monitoring</p>
+                <h1>Expiry and stock alerts</h1>
+                <p>Review medicines that may need replenishment or removal.</p>
+              </div>
+              <button id="refreshAlerts" class="btn secondary">
+                Refresh alerts
+              </button>
+            </div>
+            <div class="alert-grid">
+              <article class="card">
+                <div class="toolbar">
+                  <h2>Expiring within 30 days</h2>
+                  <span id="expiringBadge" class="pill">—</span>
+                </div>
+                <div id="expiringList"></div>
+              </article>
+              <article class="card">
+                <div class="toolbar">
+                  <h2>Low stock</h2>
+                  <span id="lowBadge" class="pill low">—</span>
+                </div>
+                <div id="lowList"></div>
+              </article>
+            </div>
+          </section>
+        </div>
       </main>
     </div>
-  </div>
+    <div class="toastbox" id="toasts" aria-live="polite"></div>
+    <script>
+      const $ = (s) => document.querySelector(s),
+        $$ = (s) => [...document.querySelectorAll(s)],
+        escape = (v) => {
+          let e = document.createElement("span");
+          e.textContent = v ?? "";
+          return e.innerHTML;
+        };
+      const api = async (u, o = {}) => {
+        let r = await fetch(u, o),
+          d = await r.json().catch(() => ({}));
+        if (!r.ok) throw Error(d.error || `Request failed (${r.status})`);
+        return d;
+      };
+      function toast(t, type = "") {
+        let e = document.createElement("div");
+        e.className = "toast " + type;
+        e.textContent = t;
+        $("#toasts").append(e);
+        setTimeout(() => e.remove(), 3500);
+      }
+      const names = {
+        dashboard: "Dashboard",
+        scan: "Scan medicine",
+        inventory: "Inventory",
+        location: "Find location",
+        add: "Add medicine",
+        alerts: "Expiry alerts",
+        prescription: "Prescription",
+      };
+      function view(id) {
+        $$(".view").forEach((x) => x.classList.toggle("active", x.id === id));
+        $$(".nav button").forEach((x) =>
+          x.classList.toggle("active", x.dataset.view === id),
+        );
+        $("#pageName").textContent = names[id];
+        if (id === "inventory") inventory();
+        if (id === "alerts") alerts();
+        if (id === "dashboard") dashboard();
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      }
+      $$(".nav button").forEach(
+        (x) => (x.onclick = () => view(x.dataset.view)),
+      );
+      $$("[data-go]").forEach((x) => (x.onclick = () => view(x.dataset.go)));
+      const pos = (m) =>
+        m.row_number == null || m.column_number == null
+          ? "Not recorded"
+          : `Row ${m.row_number} · Column ${m.column_number}`;
+      async function dashboard() {
+        try {
+          let [a, b, c, d] = await Promise.all([
+            api("/medicines"),
+            api("/medicines/expiring?days=30"),
+            api("/medicines/expired"),
+            api("/medicines/low-stock?threshold=10"),
+          ]);
+          $("#total").textContent = a.count;
+          $("#expiring").textContent = b.count;
+          $("#expired").textContent = c.count;
+          $("#low").textContent = d.count;
+        } catch (e) {
+          toast("Could not load dashboard: " + e.message, "error");
+        }
+      }
+      async function inventory(q = "") {
+        let body = $("#inventoryBody");
+        try {
+          let d = await api(
+              q ? "/search-medicine?q=" + encodeURIComponent(q) : "/medicines",
+            ),
+            ms = d.medicines || [];
+          body.innerHTML = ms.length
+            ? ms
+                .map(
+                  (m) =>
+                    `<tr><td>${escape(m.medicine_name)}</td><td><b>${escape(m.brand_name || "—")}</b><br><span class="muted">${escape(m.generic_name || "—")}</span></td><td>${escape(m.strength || "—")}<br><span class="muted">${escape(m.dosage_form || "")}</span></td><td>${escape(m.expiry_date)}</td><td><span class="pill ${+m.quantity <= 10 ? "low" : ""}">${escape(m.quantity)}</span></td><td>${escape(pos(m))}</td><td><div class="actions"><button class="btn secondary small" data-locate="${m.id}">Locate</button><button class="btn danger small" data-del="${m.id}" data-name="${escape(m.medicine_name)}">Delete</button></div></td></tr>`,
+                )
+                .join("")
+            : '<tr><td class="empty" colspan="7">No medicines found. Add a medicine to begin.</td></tr>';
+        } catch (e) {
+          body.innerHTML = `<tr><td class="empty" colspan="7">${escape(e.message)}</td></tr>`;
+        }
+      }
+      $("#inventorySearch").oninput = (e) => {
+        clearTimeout(window.it);
+        window.it = setTimeout(() => inventory(e.target.value.trim()), 250);
+      };
+      $("#refreshInventory").onclick = () =>
+        inventory($("#inventorySearch").value.trim());
+      $("#inventoryBody").onclick = async (e) => {
+        let l = e.target.closest("[data-locate]"),
+          d = e.target.closest("[data-del]");
+        if (l) {
+          view("location");
+          reveal(l.dataset.locate);
+        }
+        if (d && confirm(`Delete ${d.dataset.name}? This cannot be undone.`)) {
+          try {
+            await api("/medicine/" + d.dataset.del, { method: "DELETE" });
+            toast("Medicine deleted.");
+            inventory();
+            dashboard();
+          } catch (x) {
+            toast(x.message, "error");
+          }
+        }
+      };
+      $("#medicineForm").onsubmit = async (e) => {
+        e.preventDefault();
+        let f = e.currentTarget,
+          d = Object.fromEntries(new FormData(f));
+        ["quantity", "row_number", "column_number"].forEach(
+          (k) => (d[k] = d[k] === "" ? null : +d[k]),
+        );
+        try {
+          await api("/add-medicine", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(d),
+          });
+          f.reset();
+          f.quantity.value = 0;
+          toast("Medicine added successfully.");
+          dashboard();
+          view("inventory");
+        } catch (x) {
+          toast(x.message, "error");
+        }
+      };
+      $("#prescriptionForm").onsubmit = async (e) => {
+        e.preventDefault();
 
-  <div id="medicineLocationModal" class="modal" hidden role="dialog" aria-modal="true" aria-labelledby="locationModalTitle">
-    <div class="modal-backdrop" data-close-modal></div>
-    <div class="modal-panel"><div class="modal-header"><h2 id="locationModalTitle">Medicine location</h2><button id="closeLocationModal" class="modal-close" type="button" aria-label="Close location dialog">&times;</button></div><div id="locationModalBody" class="location-details"><p>Row Number: <strong id="locationRowNumber">--</strong></p><p>Column Number: <strong id="locationColumnNumber">--</strong></p></div></div>
-  </div>
+        const form = e.currentTarget;
+        const button = $("#generatePrescriptionBtn");
+        const result = $("#prescriptionResult");
+        const data = Object.fromEntries(new FormData(form));
+        data.phone_number = data.phone_number.replace(/\D/g, "");
 
-  <div id="toastContainer" class="toast-container" aria-live="polite" aria-atomic="true"></div>
-  <script src="/static/script.js"></script>
-</body>
+        if (!/^[6-9]\d{9}$/.test(data.phone_number)) {
+          toast("Enter a valid 10-digit Indian mobile number.", "error");
+          return;
+        }
+
+        button.disabled = true;
+        button.textContent = "Generating prescription…";
+        result.innerHTML = "";
+
+        try {
+          const response = await api("/generate-prescription", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(data),
+          });
+          const smsState = response.sms_sent
+            ? `<div class="delivery success"><strong>SMS sent successfully</strong>The prescription link was sent to ${escape(response.phone_number)}.${response.sms_sid ? ` Delivery reference: ${escape(response.sms_sid)}.` : ""}</div>`
+            : `<div class="delivery warning"><strong>Prescription generated, but SMS was not confirmed.</strong>${response.sms_error ? escape(response.sms_error) : "Check your Twilio configuration before retrying."}</div>`;
+
+          result.innerHTML = `<div class="delivery"><strong>Prescription PDF is ready for ${escape(response.patient)}</strong>The PDF was generated successfully.${response.download_url ? `<br><a href="${escape(response.download_url)}" target="_blank" rel="noopener">Open or download prescription PDF</a>` : ""}</div>${smsState}`;
+          toast(response.sms_sent ? "Prescription generated and SMS sent." : "Prescription generated.");
+        } catch (error) {
+          result.innerHTML = `<div class="delivery warning"><strong>Could not generate the prescription.</strong>${escape(error.message)}</div>`;
+          toast(error.message, "error");
+        } finally {
+          button.disabled = false;
+          button.textContent = "Generate PDF & send SMS";
+        }
+      };
+      function shelf(row, column) {
+        let s = $("#shelf");
+        s.innerHTML = "";
+        for (let r = 1; r <= 6; r++)
+          for (let c = 1; c <= 6; c++) {
+            let e = document.createElement("div");
+            e.className =
+              "slot " + (+row === r && +column === c ? "active" : "");
+            e.textContent = `R${r} · C${c}`;
+            s.append(e);
+          }
+      }
+      shelf();
+      async function reveal(id) {
+        try {
+          let d = await api("/medicine/" + id + "/location"),
+            ok = d.row_number != null && d.column_number != null;
+          $("#locName").textContent = d.medicine_name;
+          $("#locRow").textContent = ok ? d.row_number : "not recorded";
+          $("#locColumn").textContent = ok ? d.column_number : "not recorded";
+          $("#mapLabel").textContent = ok
+            ? `R${d.row_number} · C${d.column_number}`
+            : "No location saved";
+          $("#locResult").classList.add("show");
+          shelf(d.row_number, d.column_number);
+        } catch (e) {
+          toast(e.message, "error");
+        }
+      }
+      $("#locationSearch").oninput = (e) => {
+        clearTimeout(window.lt);
+        let q = e.target.value.trim();
+        window.lt = setTimeout(async () => {
+          if (!q) {
+            $("#matches").innerHTML = "";
+            return;
+          }
+          try {
+            let d = await api("/search-medicine?q=" + encodeURIComponent(q));
+            $("#matches").innerHTML = d.medicines.length
+              ? d.medicines
+                  .map(
+                    (m) =>
+                      `<div class="match"><div><b>${escape(m.medicine_name)}</b><span>${escape(m.brand_name || m.generic_name || "No brand name")}</span></div><button class="btn secondary small" data-id="${m.id}">Show location</button></div>`,
+                  )
+                  .join("")
+              : '<p class="hint">No matching medicine found.</p>';
+          } catch (x) {
+            $("#matches").innerHTML =
+              '<p class="hint">' + escape(x.message) + "</p>";
+          }
+        }, 250);
+      };
+      $("#matches").onclick = (e) => {
+        let b = e.target.closest("[data-id]");
+        if (b) reveal(b.dataset.id);
+      };
+      const rows = (ms, empty, expiry = false) =>
+        ms.length
+          ? ms
+              .map(
+                (m) =>
+                  `<div class="alert-row"><div><b>${escape(m.medicine_name)}</b><span>${expiry ? "Expiry: " + escape(m.expiry_date) : escape(m.quantity) + " units · " + escape(pos(m))}</span></div><span class="pill ${expiry ? "" : "low"}">${expiry ? "Review" : "Restock"}</span></div>`,
+              )
+              .join("")
+          : `<p class="hint" style="padding:0 20px 15px">${empty}</p>`;
+      async function alerts() {
+        try {
+          let [e, l] = await Promise.all([
+            api("/medicines/expiring?days=30"),
+            api("/medicines/low-stock?threshold=10"),
+          ]);
+          $("#expiringBadge").textContent = e.count;
+          $("#lowBadge").textContent = l.count;
+          $("#expiringList").innerHTML = rows(
+            e.medicines,
+            "No medicines are expiring in the next 30 days.",
+            true,
+          );
+          $("#lowList").innerHTML = rows(
+            l.medicines,
+            "No medicines are currently low in stock.",
+          );
+        } catch (x) {
+          toast(x.message, "error");
+        }
+      }
+      $("#refreshAlerts").onclick = alerts;
+      const input = $("#imageInput");
+      input.onchange = preview;
+      function preview() {
+        let f = input.files[0];
+        if (!f) return;
+        let r = new FileReader();
+        r.onload = (e) => {
+          $("#preview").src = e.target.result;
+          $("#preview").style.display = "block";
+        };
+        r.readAsDataURL(f);
+        $("#scanStatus").textContent =
+          input.files.length + " image(s) ready to scan.";
+      }
+      $("#clearImage").onclick = () => {
+        input.value = "";
+        $("#preview").style.display = "none";
+        $("#results").innerHTML = "";
+        $("#scanStatus").textContent = "";
+      };
+      const items = (x) =>
+        (Array.isArray(x) ? x : [x])
+          .filter(Boolean)
+          .slice(0, 5)
+          .map((i) => "<li>" + escape(i) + "</li>")
+          .join("") || "<li>Information not available.</li>";
+      function render(rs) {
+        $("#results").innerHTML =
+          Array.isArray(rs) && rs.length
+            ? rs
+                .map(
+                  (r) =>
+                    `<article class="card result"><div class="result-head"><div><h2>${escape(r.medicine_name || r.brand_name || "Medicine information")}</h2><p>Source: ${escape(r.source || "Medicine scanner")}</p></div><span class="pill">${escape(r.expiry_date || "Expiry not found")}</span></div><div class="details"><div class="detail"><small>BRAND NAME</small><b>${escape(r.brand_name || "—")}</b></div><div class="detail"><small>GENERIC NAME</small><b>${escape(r.generic_name || "—")}</b></div><div class="detail"><small>STRENGTH</small><b>${escape(r.strength || "—")}</b></div><div class="detail"><small>DOSAGE FORM</small><b>${escape(r.dosage_form || "—")}</b></div><div class="detail"><small>EXPIRY DATE</small><b>${escape(r.expiry_date || "Not found")}</b></div></div><div class="lists"><div><h3>Uses</h3><ul>${items(r.uses)}</ul></div><div><h3>Side effects</h3><ul>${items(r.side_effects)}</ul></div><div><h3>Alternatives</h3><ul>${items(r.alternatives)}</ul></div></div></article>`,
+                )
+                .join("")
+            : '<article class="card pad">No medicine information was found. Try a clearer package image.</article>';
+      }
+      $("#scanBtn").onclick = async () => {
+        if (!input.files.length)
+          return toast("Please choose at least one medicine image.", "error");
+        let b = $("#scanBtn"),
+          f = new FormData();
+        [...input.files].forEach((x) => f.append("images", x));
+        f.append("language", $("#language").value);
+        b.disabled = true;
+        $("#scanStatus").textContent =
+          "Scanning image(s)… this can take a moment.";
+        try {
+          render(await api("/process", { method: "POST", body: f }));
+          $("#scanStatus").textContent = "Scan complete.";
+        } catch (e) {
+          toast(e.message, "error");
+          $("#scanStatus").textContent = "";
+        } finally {
+          b.disabled = false;
+        }
+      };
+      dashboard();
+    </script>
+  </body>
 </html>
-

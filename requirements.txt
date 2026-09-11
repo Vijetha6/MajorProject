@@ -1,6 +1,8 @@
 Flask==2.3.3
 opencv-python==4.13.0.92
 numpy==2.4.2
+pandas
+matplotlib
 pytesseract==0.3.13
 easyocr==1.7.1
 roboflow==1.1.13
@@ -13,3 +15,8 @@ Pillow==10.1.0
 fpdf==1.7.2
 qrcode==7.3.1
 python-dotenv==1.2.1
+google-genai
+google-auth
+google-auth-oauthlib
+google-api-python-client
+twilio

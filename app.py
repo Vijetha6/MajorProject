@@ -657,15 +657,21 @@ def generate_prescription():
                 "error": "Google Drive upload failed: no URL returned."
             }), 500
 
+        sms_sent = False
+        sms_sid = None
+        sms_error = None
+
         try:
             if data.get("name") and data.get("phone_number") and drive_url:
-                send_sms(
+                sms_sid = send_sms(
                     patient_name=data["name"],
                     phone_number=data["phone_number"],
                     download_url=drive_url
                 )
+                sms_sent = bool(sms_sid)
         except Exception as e:
             logger.error(f"SMS send failed: {e}")
+            sms_error = str(e)
 
         return jsonify({
             "success": True,
@@ -676,7 +682,10 @@ def generate_prescription():
             "phone_number": data["phone_number"],
             "age": data["age"],
             "gender": data["gender"],
-            "medicines": data["medicines"]
+            "medicines": data["medicines"],
+            "sms_sent": sms_sent,
+            "sms_sid": sms_sid,
+            "sms_error": sms_error
         })
     except Exception as e:
         logger.exception("Prescription generation failed")
