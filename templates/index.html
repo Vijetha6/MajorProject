@@ -118,9 +118,11 @@
               <label for="imageInput" class="upload-zone upload-btn">
                 <span class="upload-icon" aria-hidden="true">+</span>
                 <span class="upload-title">Upload medicine images</span>
-                <span class="upload-help">PNG, JPG, or JPEG. Multiple images supported.</span>
+                <span class="upload-help">Drop images here or click to browse</span>
+                <span class="upload-formats">PNG, JPG, or JPEG · Multiple images supported</span>
               </label>
               <input id="imageInput" type="file" name="images" accept="image/*" multiple hidden>
+              <p id="fileSummary" class="file-summary" aria-live="polite">No images selected yet.</p>
               <div id="previewContainer" class="preview-container" aria-live="polite">
                 <img id="preview" alt="Selected medicine image preview" class="upload-preview" hidden>
               </div>
@@ -230,12 +232,80 @@
             <label for="patientAge">Age (years)</label><input type="number" id="patientAge" min="1" max="150" placeholder="Enter age">
             <label for="patientGender">Gender</label><select id="patientGender"><option value="">Select gender</option><option value="Male">Male</option><option value="Female">Female</option><option value="Other">Other</option></select>
             <label for="patientPhone">Mobile Number</label><input type="tel" id="patientPhone" maxlength="10" placeholder="Enter 10-digit mobile number">
-            <label for="prescriptionText">Prescription Text</label><textarea id="prescriptionText" placeholder="Example:
-Paracetamol 500 mg once daily for 1 week
-Dolo 650 twice daily for 3 weeks"></textarea>
-            <p class="hint">Enter patient details above. The prescription only needs medicines.</p>
-            <div class="generator-actions"><button id="recordSpeechBtn" type="button" class="record-btn">Record Prescription</button><button id="generateBtn" type="button" class="generate-btn">Generate Prescription PDF</button></div>
-            <p id="speechStatus" class="hint" aria-live="polite"></p>
+            <!-- ===== MEDICINE ENTRY FORM (Person 2 – E-Prescription Enhancement) ===== -->
+            <div class="rx-entry-panel" id="rxEntryPanel">
+              <p class="rx-panel-title">Add a Medicine</p>
+
+              <div class="rx-form-grid">
+                <div class="rx-field">
+                  <label for="rxMedicineName">Medicine Name <span class="rx-required">*</span></label>
+                  <input type="text" id="rxMedicineName" placeholder="e.g. Amoxicillin" autocomplete="off">
+                </div>
+                <div class="rx-field">
+                  <label for="rxDosage">Dosage <span class="rx-required">*</span></label>
+                  <input type="text" id="rxDosage" placeholder="e.g. 1 tablet, 5 ml">
+                </div>
+                <div class="rx-field">
+                  <label for="rxFrequency">Frequency <span class="rx-required">*</span></label>
+                  <select id="rxFrequency">
+                    <option value="">Select frequency</option>
+                    <option value="Once daily">Once daily</option>
+                    <option value="Twice daily">Twice daily</option>
+                    <option value="Three times daily">Three times daily</option>
+                    <option value="Four times daily">Four times daily</option>
+                    <option value="As needed">As needed</option>
+                  </select>
+                </div>
+                <div class="rx-field">
+                  <label for="rxFood">Food Instruction <span class="rx-required">*</span></label>
+                  <select id="rxFood">
+                    <option value="">Select food instruction</option>
+                    <option value="Before food">Before food</option>
+                    <option value="After food">After food</option>
+                    <option value="With food">With food</option>
+                    <option value="Empty stomach">Empty stomach</option>
+                  </select>
+                </div>
+                <div class="rx-field">
+                  <label for="rxDuration">Duration <span class="rx-required">*</span></label>
+                  <input type="text" id="rxDuration" placeholder="e.g. 5 days, 1 month">
+                </div>
+                <div class="rx-field rx-field-full">
+                  <label>Timing <span class="rx-required" id="rxTimingRequired">*</span></label>
+                  <div class="rx-timing-group" id="rxTimingGroup">
+                    <label class="rx-check-label"><input type="checkbox" name="rxTiming" value="Morning"> Morning</label>
+                    <label class="rx-check-label"><input type="checkbox" name="rxTiming" value="Afternoon"> Afternoon</label>
+                    <label class="rx-check-label"><input type="checkbox" name="rxTiming" value="Evening"> Evening</label>
+                    <label class="rx-check-label"><input type="checkbox" name="rxTiming" value="Night"> Night</label>
+                  </div>
+                  <p class="hint" id="rxTimingHint">Select one or more timing options (disabled for "As needed").</p>
+                </div>
+                <div class="rx-field rx-field-full">
+                  <label for="rxSpecial">Special Instructions <span class="rx-optional">(optional)</span></label>
+                  <input type="text" id="rxSpecial" placeholder="e.g. Shake well before use, avoid alcohol">
+                </div>
+              </div>
+
+              <div class="rx-entry-actions">
+                <button id="recordSpeechBtn" type="button" class="record-btn" title="Dictate medicine name">🎙️ Dictate Name</button>
+                <button id="rxAddBtn" type="button" class="rx-add-btn">+ Add Medicine</button>
+              </div>
+              <p id="speechStatus" class="hint" aria-live="polite"></p>
+              <p id="rxFormError" class="rx-form-error" aria-live="polite"></p>
+            </div>
+
+            <!-- ===== ADDED MEDICINES LIST ===== -->
+            <div class="rx-list-panel" id="rxListPanel">
+              <p class="rx-panel-title">Added Medicines <span id="rxMedicineCount" class="rx-count-badge">0</span></p>
+              <div id="rxMedicineList" class="rx-medicine-list">
+                <p class="rx-empty-state" id="rxEmptyState">No medicines added yet. Use the form above to add medicines.</p>
+              </div>
+            </div>
+
+            <!-- ===== GENERATE BUTTON ===== -->
+            <div class="generator-actions">
+              <button id="generateBtn" type="button" class="generate-btn">Generate Prescription PDF</button>
+            </div>
             <div id="generatorOutput" class="output" aria-live="polite"></div>
           </article>
         </section>
@@ -249,7 +319,7 @@ Dolo 650 twice daily for 3 weeks"></textarea>
   </div>
 
   <div id="toastContainer" class="toast-container" aria-live="polite" aria-atomic="true"></div>
-  <script src="/static/script.js"></script>
+  <script src="/static/script.js?v=2"></script>
 </body>
 </html>
 
