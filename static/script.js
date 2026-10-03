@@ -817,3 +817,180 @@ if (!document.querySelector('#loading-style')) {
   `;
   document.head.appendChild(style);
 }
+
+// Keep the dashboard sections accessible through the existing navigation hooks.
+const pageSections = Array.from(document.querySelectorAll('.page-section'));
+const navigationItems = Array.from(document.querySelectorAll('.nav-item'));
+const sectionTargets = Array.from(document.querySelectorAll('[data-section-target]'));
+
+function showPageSection(sectionId) {
+  const section = document.getElementById(sectionId);
+  if (!section) return;
+
+  pageSections.forEach(pageSection => {
+    pageSection.classList.toggle('active-section', pageSection === section);
+  });
+
+  navigationItems.forEach(item => {
+    item.classList.toggle('active', item.dataset.section === sectionId);
+  });
+
+  section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+navigationItems.forEach(item => {
+  item.addEventListener('click', () => showPageSection(item.dataset.section));
+});
+
+sectionTargets.forEach(target => {
+  target.addEventListener('click', () => showPageSection(target.dataset.sectionTarget));
+});
+
+const staffUpdateImageInput = document.getElementById('staffUpdateImageInput');
+const staffUpdateScanBtn = document.getElementById('staffUpdateScanBtn');
+const staffUpdateStatus = document.getElementById('staffUpdateStatus');
+const staffLocationImageInput = document.getElementById('staffLocationImageInput');
+const staffLocationScanBtn = document.getElementById('staffLocationScanBtn');
+const staffLocationStatus = document.getElementById('staffLocationStatus');
+const staffLocationResult = document.getElementById('staffLocationResult');
+const addMedicineForm = document.getElementById('addMedicineForm');
+const editExtractedFieldsBtn = document.getElementById('editExtractedFieldsBtn');
+const inventoryTableBody = document.getElementById('inventoryTableBody');
+const inventoryRefreshBtn = document.getElementById('inventoryRefreshBtn');
+const expiringList = document.getElementById('expiringList');
+const expiredList = document.getElementById('expiredList');
+const staffLowStockList = document.getElementById('staffLowStockList');
+
+function formatExpiryForInput(value) {
+  if (!value || value === 'NOT FOUND' || value === 'Information not available') return '';
+  const normalized = String(value).trim().replace(/[./]/g, '-');
+  if (/^\d{4}-\d{1,2}$/.test(normalized)) return `${normalized}-01`;
+  if (/^\d{1,2}-\d{4}$/.test(normalized)) {
+    const [month, year] = normalized.split('-');
+    return `${year}-${month.padStart(2, '0')}-01`;
+  }
+  if (/^\d{4}-\d{1,2}-\d{1,2}$/.test(normalized)) {
+    return normalized.split('-').map((part, index) => index === 1 || index === 2 ? part.padStart(2, '0') : part).join('-');
+  }
+  return normalized;
+}
+
+function firstScanResult(data) {
+  if (!Array.isArray(data) || !data.length) throw new Error('No medicine details were detected.');
+  if (data[0].error && !data[0].medicine_name && !data[0].brand_name) throw new Error(data[0].error);
+  return data[0];
+}
+
+async function scanStaffImage(file) {
+  if (!file) throw new Error('Please upload a medicine image first.');
+  const formData = new FormData();
+  formData.append('images', file);
+  formData.append('language', langToggle.value);
+  const response = await fetch('/process', { method: 'POST', body: formData });
+  const data = await response.json();
+  if (!response.ok || data.error) throw new Error(data.error || 'Medicine scan failed.');
+  return firstScanResult(data);
+}
+
+function fillStaffMedicineForm(result) {
+  document.getElementById('medicineNameInput').value = result.medicine_name || result.generic_name || result.brand_name || '';
+  document.getElementById('brandNameInput').value = result.brand_name || '';
+  document.getElementById('genericNameInput').value = result.generic_name || '';
+  document.getElementById('strengthInput').value = result.strength || '';
+  document.getElementById('dosageFormInput').value = result.dosage_form || '';
+  document.getElementById('expiryDateInput').value = formatExpiryForInput(result.expiry_date);
+}
+
+function setStaffFieldsEditable(editable) {
+  ['medicineNameInput', 'brandNameInput', 'genericNameInput', 'strengthInput', 'dosageFormInput', 'expiryDateInput']
+    .forEach(id => { document.getElementById(id).readOnly = !editable; });
+}
+
+async function scanForStaffUpdate() {
+  staffUpdateStatus.textContent = 'Scanning with YOLO, OCR and Gemini...';
+  staffUpdateScanBtn.disabled = true;
+  try {
+    const result = await scanStaffImage(staffUpdateImageInput.files[0]);
+    fillStaffMedicineForm(result);
+    setStaffFieldsEditable(false);
+    staffUpdateStatus.textContent = 'Details extracted. Enter quantity, row and column, then save.';
+  } catch (error) {
+    staffUpdateStatus.textContent = error.message;
+  } finally {
+    staffUpdateScanBtn.disabled = false;
+  }
+}
+
+async function scanForLocation() {
+  staffLocationStatus.textContent = 'Scanning medicine image...';
+  staffLocationResult.hidden = true;
+  staffLocationScanBtn.disabled = true;
+  try {
+    const result = await scanStaffImage(staffLocationImageInput.files[0]);
+    const searchName = result.medicine_name || result.generic_name || result.brand_name;
+    const response = await fetch(`/search-medicine?q=${encodeURIComponent(searchName)}`);
+    const data = await response.json();
+    if (!response.ok || !data.medicines || !data.medicines.length) throw new Error('Medicine was not found in inventory.');
+    const medicine = data.medicines[0];
+    staffLocationResult.innerHTML = `<strong>${escapeHtml(medicine.medicine_name)}</strong><span>LOCATION FOUND</span><span>Row: ${escapeHtml(medicine.row_number ?? 'Not stored')}</span><span>Column / Rack: ${escapeHtml(medicine.column_number ?? 'Not stored')}</span>`;
+    staffLocationResult.hidden = false;
+    staffLocationStatus.textContent = '';
+  } catch (error) {
+    staffLocationStatus.textContent = error.message;
+  } finally {
+    staffLocationScanBtn.disabled = false;
+  }
+}
+
+async function saveStaffMedicine(event) {
+  event.preventDefault();
+  const formData = new FormData(addMedicineForm);
+  const payload = Object.fromEntries(formData.entries());
+  try {
+    const response = await fetch('/add-medicine', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Could not save medicine.');
+    staffUpdateStatus.textContent = 'Medicine saved to inventory.';
+    addMedicineForm.reset();
+    setStaffFieldsEditable(false);
+    loadInventory();
+  } catch (error) {
+    staffUpdateStatus.textContent = error.message;
+  }
+}
+
+function renderInventory(medicines) {
+  inventoryTableBody.innerHTML = medicines.length ? medicines.map((medicine, index) => `<tr><td>${index + 1}</td><td>${escapeHtml(medicine.medicine_name)}</td><td>${escapeHtml(medicine.strength || '')}</td><td>${escapeHtml(medicine.expiry_date)}</td><td>${escapeHtml(medicine.row_number ?? '')}</td><td>${escapeHtml(medicine.column_number ?? '')}</td></tr>`).join('') : '<tr><td colspan="6" class="table-empty">No medicines in stock.</td></tr>';
+}
+
+async function loadInventory() {
+  const response = await fetch('/medicines');
+  const data = await response.json();
+  renderInventory(data.medicines || []);
+}
+
+function renderAlertList(element, medicines, emptyText) {
+  element.innerHTML = medicines.length ? medicines.map(medicine => `<div>${escapeHtml(medicine.medicine_name)} <small>(${escapeHtml(medicine.expiry_date)} | Qty: ${escapeHtml(medicine.quantity)})</small></div>`).join('') : `<div class="empty-state">${emptyText}</div>`;
+}
+
+async function loadStaffAlerts() {
+  const [expiring, expired, lowStock] = await Promise.all([
+    fetch('/medicines/expiring').then(response => response.json()),
+    fetch('/medicines/expired').then(response => response.json()),
+    fetch('/medicines/low-stock').then(response => response.json())
+  ]);
+  renderAlertList(expiringList, expiring.medicines || [], 'No medicines nearing expiry.');
+  renderAlertList(expiredList, expired.medicines || [], 'No expired medicines.');
+  renderAlertList(staffLowStockList, lowStock.medicines || [], 'No low-stock medicines.');
+}
+
+staffUpdateScanBtn.addEventListener('click', scanForStaffUpdate);
+staffLocationScanBtn.addEventListener('click', scanForLocation);
+addMedicineForm.addEventListener('submit', saveStaffMedicine);
+editExtractedFieldsBtn.addEventListener('click', () => {
+  setStaffFieldsEditable(true);
+  staffUpdateStatus.textContent = 'Edit the extracted details, then save the medicine.';
+});
+inventoryRefreshBtn.addEventListener('click', loadInventory);
+document.querySelectorAll('[data-section-target="inventorySection"]').forEach(button => button.addEventListener('click', loadInventory));
+document.querySelectorAll('[data-section-target="alertsSection"]').forEach(button => button.addEventListener('click', loadStaffAlerts));

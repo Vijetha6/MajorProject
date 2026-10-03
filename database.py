@@ -79,7 +79,7 @@ def get_all_medicines():
     conn = get_connection()
 
     medicines = conn.execute(
-        "SELECT * FROM medicines ORDER BY medicine_name"
+        "SELECT * FROM medicines ORDER BY medicine_name COLLATE NOCASE ASC, id ASC"
     ).fetchall()
 
     conn.close()
@@ -202,8 +202,8 @@ def get_expiring_medicines(days=30):
 
     medicines = conn.execute("""
         SELECT * FROM medicines
-        WHERE date(expiry_date) <= date('now', '+' || ? || ' days')
-        AND date(expiry_date) >= date('now')
+        WHERE date(expiry_date) > date('now')
+        AND date(expiry_date) <= date('now', '+' || ? || ' days')
         ORDER BY expiry_date
     """, (days,)).fetchall()
 
@@ -219,7 +219,7 @@ def get_expired_medicines():
 
     medicines = conn.execute("""
         SELECT * FROM medicines
-        WHERE date(expiry_date) < date('now')
+        WHERE date(expiry_date) <= date('now')
         ORDER BY expiry_date
     """).fetchall()
 

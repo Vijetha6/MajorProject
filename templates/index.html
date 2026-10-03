@@ -13,16 +13,11 @@
       <div class="brand-block">
         <div class="brand-mark" aria-hidden="true">M</div>
         <div>
-          <p class="brand-name">MedInfo</p>
+          <p class="brand-name">MEDICINE TOOLKIT</p>
           <p class="brand-tagline">AI-Powered Medicine Identification &amp; Inventory System</p>
         </div>
       </div>
       <div class="header-actions">
-        <label for="langToggle">Language</label>
-        <select id="langToggle" aria-label="Choose information language">
-          <option value="en">English</option>
-          <option value="kn">ಕನ್ನಡ</option>
-        </select>
       </div>
     </header>
 
@@ -35,7 +30,6 @@
           <button class="nav-item" type="button" data-section="inventorySection">Inventory</button>
           <button class="nav-item" type="button" data-section="addMedicineSection">Add Medicine</button>
           <button class="nav-item" type="button" data-section="alertsSection">Expiry Alerts</button>
-          <button class="nav-item" type="button" data-section="lowStockSection">Low Stock</button>
         </nav>
         <div class="sidebar-footer">
           <span class="status-dot" aria-hidden="true"></span>
@@ -45,71 +39,32 @@
 
       <main class="main-content">
         <button id="tabGenerator" class="legacy-tab-control" type="button" hidden>Prescription Generator</button>
-        <section id="dashboardSection" class="page-section active-section" aria-labelledby="dashboardTitle">
-          <div class="section-heading">
-            <div>
-              <p class="eyebrow">Overview</p>
-              <h1 id="dashboardTitle">Good day, welcome to MedInfo</h1>
-              <p class="section-description">Monitor medicine identification and stock activity from one place.</p>
-            </div>
-            <button class="secondary-button" type="button" data-section-target="scanSection">Scan a medicine</button>
-          </div>
-
-          <div id="dashboardStats" class="stats-grid">
-            <article class="stat-card stat-card-blue">
-              <span class="stat-label">Total Medicines</span>
-              <strong id="totalMedicinesStat" class="stat-value">--</strong>
-              <span class="stat-note">Items in inventory</span>
-            </article>
-            <article class="stat-card stat-card-amber">
-              <span class="stat-label">Expiring Soon</span>
-              <strong id="expiringSoonStat" class="stat-value">--</strong>
-              <span class="stat-note">Within 30 days</span>
-            </article>
-            <article class="stat-card stat-card-red">
-              <span class="stat-label">Expired</span>
-              <strong id="expiredStat" class="stat-value">--</strong>
-              <span class="stat-note">Needs attention</span>
-            </article>
-            <article class="stat-card stat-card-green">
-              <span class="stat-label">Low Stock</span>
-              <strong id="lowStockStat" class="stat-value">--</strong>
-              <span class="stat-note">Below threshold</span>
-            </article>
-          </div>
-
-          <div class="dashboard-grid">
-            <article class="content-card workflow-card">
-              <div class="card-heading">
-                <div>
-                  <p class="eyebrow">Core workflow</p>
-                  <h2>From image to insight</h2>
-                </div>
-              </div>
-              <div class="workflow-steps">
-                <span>Upload image</span><span>AI processing</span><span>Medicine detection</span><span>Inventory action</span>
-              </div>
-            </article>
-            <article class="content-card quick-card">
-              <p class="eyebrow">Quick actions</p>
-              <h2>What would you like to do?</h2>
-              <div class="quick-actions">
-                <button class="quick-action" type="button" data-section-target="scanSection">Scan image</button>
-                <button class="quick-action" type="button" data-section-target="addMedicineSection">Add stock</button>
-                <button class="quick-action" type="button" data-section-target="inventorySection">View inventory</button>
-              </div>
-            </article>
+        <section id="dashboardSection" class="page-section active-section home-section" aria-labelledby="dashboardTitle">
+          <p class="home-description">Select you role</p>
+          <div class="role-buttons">
+            <button class="role-button" type="button" data-section-target="scanSection">Patient</button>
+            <button class="role-button" type="button" data-section-target="generatorTab">Doctor</button>
+            <button class="role-button" type="button" data-section-target="inventorySection">Medical Staff</button>
           </div>
         </section>
 
         <section id="scanSection" class="page-section" aria-labelledby="scanTitle">
           <button id="tabAnalyzer" class="legacy-tab-control" type="button" hidden>Scan Medicine</button>
+          <button class="back-button" type="button" data-section-target="dashboardSection">Back to home</button>
+          <div class="patient-language-row">
+            <span aria-hidden="true">🌐</span>
+            <label for="langToggle">Language:</label>
+            <select id="langToggle" aria-label="Choose information language">
+              <option value="en">English</option>
+              <option value="kn">Kannada</option>
+            </select>
+          </div>
           <div id="analyzerTab" class="tab-content active">
           <div class="section-heading">
             <div>
               <p class="eyebrow">AI scanner</p>
               <h1 id="scanTitle">Identify a medicine</h1>
-              <p class="section-description">Upload one or more clear package images for OCR, expiry detection, and medicine information.</p>
+              <p class="section-description">Analyze medicine packet to get expiry, name and information.</p>
             </div>
           </div>
 
@@ -117,19 +72,17 @@
             <article class="content-card scanner-card">
               <label for="imageInput" class="upload-zone upload-btn">
                 <span class="upload-icon" aria-hidden="true">+</span>
-                <span class="upload-title">Upload medicine images</span>
-                <span class="upload-help">Drop images here or click to browse</span>
-                <span class="upload-formats">PNG, JPG, or JPEG · Multiple images supported</span>
+                <span class="upload-title">Upload / Drag Medicine Image</span>
+                <span class="upload-help">PNG, JPG, or JPEG. Multiple images supported.</span>
               </label>
               <input id="imageInput" type="file" name="images" accept="image/*" multiple hidden>
-              <p id="fileSummary" class="file-summary" aria-live="polite">No images selected yet.</p>
               <div id="previewContainer" class="preview-container" aria-live="polite">
                 <img id="preview" alt="Selected medicine image preview" class="upload-preview" hidden>
               </div>
               <button id="submitBtn" type="button" class="primary-button extract-btn">Scan Medicine</button>
               <div id="loading" class="loading" hidden aria-live="polite">
                 <span class="spinner" aria-hidden="true"></span>
-                <p>Processing image(s). This may take a moment.</p>
+                <p>Processing image. This may take a moment.</p>
               </div>
             </article>
 
@@ -177,135 +130,84 @@
         </section>
 
         <section id="inventorySection" class="page-section" aria-labelledby="inventoryTitle">
-          <div class="section-heading">
-            <div><p class="eyebrow">Stock management</p><h1 id="inventoryTitle">Medicine inventory</h1><p class="section-description">Search, review, and manage medicines stored in your inventory.</p></div>
-            <button class="primary-button" type="button" data-section-target="addMedicineSection">Add medicine</button>
+          <div class="staff-tabs"><button class="staff-tab active" type="button" data-section-target="inventorySection">Update Medicine</button><button class="staff-tab" type="button" data-section-target="addMedicineSection">Search Location</button><button class="staff-tab" type="button" data-section-target="alertsSection">Expiry Monitor</button></div>
+          <button class="back-button" type="button" data-section-target="dashboardSection">Back to home</button>
+          <h2 id="inventoryTitle">Update Medicine</h2>
+          <p class="staff-help">Scan the medicine first. Verify the extracted details, then enter its quantity and storage location.</p>
+          <div class="staff-scan-row">
+            <label for="staffUpdateImageInput" class="upload-zone staff-upload-zone">📤 Upload / Scan Medicine Image</label>
+            <input id="staffUpdateImageInput" type="file" accept="image/*" hidden>
+            <button id="staffUpdateScanBtn" class="primary-button" type="button">Scan Medicine</button>
           </div>
+          <p id="staffUpdateStatus" class="staff-status" aria-live="polite"></p>
+          <article class="content-card form-card staff-update-form-card">
+            <form id="addMedicineForm">
+              <div class="form-grid">
+                <label>Medicine Name<input id="medicineNameInput" name="medicine_name" type="text" required readonly></label>
+                <label>Brand Name<input id="brandNameInput" name="brand_name" type="text" readonly></label>
+                <label>Generic Name<input id="genericNameInput" name="generic_name" type="text" readonly></label>
+                <label>Strength<input id="strengthInput" name="strength" type="text" placeholder="e.g. 500 mg" readonly></label>
+                <label>Dosage Form<input id="dosageFormInput" name="dosage_form" type="text" placeholder="e.g. Tablet" readonly></label>
+                <label>Expiry Date<input id="expiryDateInput" name="expiry_date" type="date" required readonly></label>
+                <label>Quantity<input id="quantityInput" name="quantity" type="number" min="0" value="0"></label>
+                <label>Row Number<input id="rowNumberInput" name="row_number" type="number" min="0"></label>
+                <label>Column Number<input id="columnNumberInput" name="column_number" type="number" min="0"></label>
+              </div>
+              <p class="staff-help">Review the extracted details, then enter only quantity, row and column.</p>
+              <button id="editExtractedFieldsBtn" class="secondary-button" type="button">Edit Details</button>
+              <button id="addMedicineSubmitBtn" class="primary-button" type="submit">Save medicine</button>
+            </form>
+          </article>
           <article class="content-card table-card">
             <div class="table-toolbar">
-              <label class="search-field" for="inventorySearch"><span>Search inventory</span><input id="inventorySearch" type="search" placeholder="Search by medicine, brand, or generic name"></label>
+              <div><h2>Current Stock</h2><p class="table-note">Medicines currently stored in inventory.</p></div>
               <div class="table-actions"><button id="inventoryRefreshBtn" class="secondary-button" type="button">Refresh</button></div>
             </div>
             <div class="table-wrapper">
-              <table id="inventoryTable"><thead><tr><th>ID</th><th>Medicine Name</th><th>Brand Name</th><th>Generic Name</th><th>Strength</th><th>Dosage Form</th><th>Expiry Date</th><th>Quantity</th><th>Row</th><th>Column</th><th>Actions</th></tr></thead><tbody id="inventoryTableBody"><tr><td colspan="11" class="table-empty">Inventory records will appear here.</td></tr></tbody></table>
+              <table id="inventoryTable"><thead><tr><th>ID</th><th>Medicine Name</th><th>Strength</th><th>Expiry Date</th><th>Row</th><th>Column</th></tr></thead><tbody id="inventoryTableBody"><tr><td colspan="6" class="table-empty">Stock records will appear here.</td></tr></tbody></table>
             </div>
           </article>
         </section>
 
         <section id="addMedicineSection" class="page-section" aria-labelledby="addMedicineTitle">
-          <div class="section-heading"><div><p class="eyebrow">Inventory entry</p><h1 id="addMedicineTitle">Add medicine</h1><p class="section-description">Record medicine details and its storage location.</p></div></div>
-          <article class="content-card form-card">
-            <form id="addMedicineForm">
-              <div class="form-grid">
-                <label>Medicine Name<input id="medicineNameInput" name="medicine_name" type="text" required></label>
-                <label>Brand Name<input id="brandNameInput" name="brand_name" type="text"></label>
-                <label>Generic Name<input id="genericNameInput" name="generic_name" type="text"></label>
-                <label>Strength<input id="strengthInput" name="strength" type="text" placeholder="e.g. 500 mg"></label>
-                <label>Dosage Form<input id="dosageFormInput" name="dosage_form" type="text" placeholder="e.g. Tablet"></label>
-                <label>Expiry Date<input id="expiryDateInput" name="expiry_date" type="date" required></label>
-                <label>Quantity<input id="quantityInput" name="quantity" type="number" min="0" value="0"></label>
-                <label>Row Number<input id="rowNumberInput" name="row_number" type="number" min="0"></label>
-                <label>Column Number<input id="columnNumberInput" name="column_number" type="number" min="0"></label>
-              </div>
-              <button id="addMedicineSubmitBtn" class="primary-button" type="submit">Save medicine</button>
-            </form>
-          </article>
+          <div class="staff-tabs"><button class="staff-tab" type="button" data-section-target="inventorySection">Update Medicine</button><button class="staff-tab active" type="button" data-section-target="addMedicineSection">Search Location</button><button class="staff-tab" type="button" data-section-target="alertsSection">Expiry Monitor</button></div>
+          <button class="back-button" type="button" data-section-target="dashboardSection">Back to home</button>
+          <h2 id="addMedicineTitle">Search Location</h2>
+          <p class="staff-help">Scan a medicine image to find its stored row and column/rack.</p>
+          <div class="staff-scan-row">
+            <label for="staffLocationImageInput" class="upload-zone staff-upload-zone">📤 Upload / Scan Medicine Image</label>
+            <input id="staffLocationImageInput" type="file" accept="image/*" hidden>
+            <button id="staffLocationScanBtn" class="primary-button" type="button">Find Location</button>
+          </div>
+          <p id="staffLocationStatus" class="staff-status" aria-live="polite"></p>
+          <div id="staffLocationResult" class="staff-location-result" hidden></div>
         </section>
 
         <section id="alertsSection" class="page-section" aria-labelledby="alertsTitle">
+          <div class="staff-tabs"><button class="staff-tab" type="button" data-section-target="inventorySection">Update Medicine</button><button class="staff-tab" type="button" data-section-target="addMedicineSection">Search Location</button><button class="staff-tab active" type="button" data-section-target="alertsSection">Expiry Monitor</button></div>
+          <button class="back-button" type="button" data-section-target="dashboardSection">Back to home</button>
           <div class="section-heading"><div><p class="eyebrow">Safety monitoring</p><h1 id="alertsTitle">Expiry alerts</h1><p class="section-description">Review medicines that need attention before they become unsafe to use.</p></div></div>
           <div class="alert-grid">
             <article class="content-card alert-card"><div class="card-heading"><h2>Expiring soon</h2><span class="alert-count" id="expiringCount">--</span></div><div id="expiringList" class="alert-list"><div class="empty-state">Expiring medicines will appear here.</div></div></article>
             <article class="content-card alert-card alert-card-danger"><div class="card-heading"><h2>Expired medicines</h2><span class="alert-count" id="expiredCount">--</span></div><div id="expiredList" class="alert-list"><div class="empty-state">Expired medicines will appear here.</div></div></article>
           </div>
-        </section>
-
-        <section id="lowStockSection" class="page-section" aria-labelledby="lowStockTitle">
-          <div class="section-heading"><div><p class="eyebrow">Stock monitoring</p><h1 id="lowStockTitle">Low-stock medicines</h1><p class="section-description">Find medicines that may need replenishment.</p></div></div>
-          <article class="content-card table-card"><div class="table-toolbar"><div><h2>Replenishment list</h2><p class="table-note">Default threshold: 10 units</p></div><span class="alert-count" id="lowStockCount">--</span></div><div class="table-wrapper"><table id="lowStockTable"><thead><tr><th>Medicine Name</th><th>Quantity</th><th>Location</th><th>Expiry Date</th></tr></thead><tbody id="lowStockTableBody"><tr><td colspan="4" class="table-empty">Low-stock records will appear here.</td></tr></tbody></table></div></article>
+          <article class="content-card low-stock-monitor"><h2>Low-stock medicines</h2><div id="staffLowStockList" class="alert-list">Loading...</div></article>
         </section>
 
         <section id="generatorTab" class="page-section prescription-section" aria-labelledby="prescriptionTitle">
+          <button class="back-button" type="button" data-section-target="dashboardSection">Back to home</button>
           <div class="section-heading"><div><p class="eyebrow">Patient care</p><h1 id="prescriptionTitle">Prescription generator</h1><p class="section-description">Create and share a digitally generated prescription.</p></div></div>
           <article class="content-card generator-card">
             <label for="patientName">Patient Name</label><input type="text" id="patientName" placeholder="Enter patient name">
             <label for="patientAge">Age (years)</label><input type="number" id="patientAge" min="1" max="150" placeholder="Enter age">
             <label for="patientGender">Gender</label><select id="patientGender"><option value="">Select gender</option><option value="Male">Male</option><option value="Female">Female</option><option value="Other">Other</option></select>
             <label for="patientPhone">Mobile Number</label><input type="tel" id="patientPhone" maxlength="10" placeholder="Enter 10-digit mobile number">
-            <!-- ===== MEDICINE ENTRY FORM (Person 2 – E-Prescription Enhancement) ===== -->
-            <div class="rx-entry-panel" id="rxEntryPanel">
-              <p class="rx-panel-title">Add a Medicine</p>
-
-              <div class="rx-form-grid">
-                <div class="rx-field">
-                  <label for="rxMedicineName">Medicine Name <span class="rx-required">*</span></label>
-                  <input type="text" id="rxMedicineName" placeholder="e.g. Amoxicillin" autocomplete="off">
-                </div>
-                <div class="rx-field">
-                  <label for="rxDosage">Dosage <span class="rx-required">*</span></label>
-                  <input type="text" id="rxDosage" placeholder="e.g. 1 tablet, 5 ml">
-                </div>
-                <div class="rx-field">
-                  <label for="rxFrequency">Frequency <span class="rx-required">*</span></label>
-                  <select id="rxFrequency">
-                    <option value="">Select frequency</option>
-                    <option value="Once daily">Once daily</option>
-                    <option value="Twice daily">Twice daily</option>
-                    <option value="Three times daily">Three times daily</option>
-                    <option value="Four times daily">Four times daily</option>
-                    <option value="As needed">As needed</option>
-                  </select>
-                </div>
-                <div class="rx-field">
-                  <label for="rxFood">Food Instruction <span class="rx-required">*</span></label>
-                  <select id="rxFood">
-                    <option value="">Select food instruction</option>
-                    <option value="Before food">Before food</option>
-                    <option value="After food">After food</option>
-                    <option value="With food">With food</option>
-                    <option value="Empty stomach">Empty stomach</option>
-                  </select>
-                </div>
-                <div class="rx-field">
-                  <label for="rxDuration">Duration <span class="rx-required">*</span></label>
-                  <input type="text" id="rxDuration" placeholder="e.g. 5 days, 1 month">
-                </div>
-                <div class="rx-field rx-field-full">
-                  <label>Timing <span class="rx-required" id="rxTimingRequired">*</span></label>
-                  <div class="rx-timing-group" id="rxTimingGroup">
-                    <label class="rx-check-label"><input type="checkbox" name="rxTiming" value="Morning"> Morning</label>
-                    <label class="rx-check-label"><input type="checkbox" name="rxTiming" value="Afternoon"> Afternoon</label>
-                    <label class="rx-check-label"><input type="checkbox" name="rxTiming" value="Evening"> Evening</label>
-                    <label class="rx-check-label"><input type="checkbox" name="rxTiming" value="Night"> Night</label>
-                  </div>
-                  <p class="hint" id="rxTimingHint">Select one or more timing options (disabled for "As needed").</p>
-                </div>
-                <div class="rx-field rx-field-full">
-                  <label for="rxSpecial">Special Instructions <span class="rx-optional">(optional)</span></label>
-                  <input type="text" id="rxSpecial" placeholder="e.g. Shake well before use, avoid alcohol">
-                </div>
-              </div>
-
-              <div class="rx-entry-actions">
-                <button id="recordSpeechBtn" type="button" class="record-btn" title="Dictate medicine name">🎙️ Dictate Name</button>
-                <button id="rxAddBtn" type="button" class="rx-add-btn">+ Add Medicine</button>
-              </div>
-              <p id="speechStatus" class="hint" aria-live="polite"></p>
-              <p id="rxFormError" class="rx-form-error" aria-live="polite"></p>
-            </div>
-
-            <!-- ===== ADDED MEDICINES LIST ===== -->
-            <div class="rx-list-panel" id="rxListPanel">
-              <p class="rx-panel-title">Added Medicines <span id="rxMedicineCount" class="rx-count-badge">0</span></p>
-              <div id="rxMedicineList" class="rx-medicine-list">
-                <p class="rx-empty-state" id="rxEmptyState">No medicines added yet. Use the form above to add medicines.</p>
-              </div>
-            </div>
-
-            <!-- ===== GENERATE BUTTON ===== -->
-            <div class="generator-actions">
-              <button id="generateBtn" type="button" class="generate-btn">Generate Prescription PDF</button>
-            </div>
+            <label for="prescriptionText">Prescription Text</label><textarea id="prescriptionText" placeholder="Example:
+Paracetamol 500 mg once daily for 1 week
+Dolo 650 twice daily for 3 weeks"></textarea>
+            <p class="hint">Enter patient details above. The prescription only needs medicines.</p>
+            <div class="generator-actions"><button id="recordSpeechBtn" type="button" class="record-btn">Record Prescription</button><button id="generateBtn" type="button" class="generate-btn">Generate Prescription PDF</button></div>
+            <p id="speechStatus" class="hint" aria-live="polite"></p>
             <div id="generatorOutput" class="output" aria-live="polite"></div>
           </article>
         </section>
@@ -319,7 +221,7 @@
   </div>
 
   <div id="toastContainer" class="toast-container" aria-live="polite" aria-atomic="true"></div>
-  <script src="/static/script.js?v=2"></script>
+  <script src="/static/script.js"></script>
 </body>
 </html>
 
