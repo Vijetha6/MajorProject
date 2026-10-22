@@ -6,10 +6,6 @@ const output = document.getElementById('output');
 const fileSummary = document.getElementById('fileSummary');
 const langToggle = document.getElementById('langToggle');
 const loading = document.getElementById('loading');
-const tabAnalyzer = document.getElementById('tabAnalyzer');
-const tabGenerator = document.getElementById('tabGenerator');
-const analyzerTab = document.getElementById('analyzerTab');
-const generatorTab = document.getElementById('generatorTab');
 const generateBtn = document.getElementById('generateBtn');
 const generatorOutput = document.getElementById('generatorOutput');
 const recordSpeechBtn = document.getElementById('recordSpeechBtn');
@@ -152,7 +148,8 @@ function clearMedicineForm() {
 // ─────────────────────────────────────────────────────────────────────────────
 // MEDICINE FORM: frequency change → disable/enable timing checkboxes
 // ─────────────────────────────────────────────────────────────────────────────
-document.getElementById('rxFrequency').addEventListener('change', function () {
+const rxFrequency = document.getElementById('rxFrequency');
+if (rxFrequency) rxFrequency.addEventListener('change', function () {
   const isAsNeeded = this.value === 'As needed';
   document.querySelectorAll('input[name="rxTiming"]').forEach(cb => {
     cb.disabled = isAsNeeded;
@@ -161,11 +158,11 @@ document.getElementById('rxFrequency').addEventListener('change', function () {
   const hint = document.getElementById('rxTimingHint');
   const req  = document.getElementById('rxTimingRequired');
   if (isAsNeeded) {
-    hint.textContent = 'Timing not applicable for "As needed" frequency.';
-    req.style.display = 'none';
+    if (hint) hint.textContent = 'Timing not applicable for "As needed" frequency.';
+    if (req) req.style.display = 'none';
   } else {
-    hint.textContent = 'Select one or more timing options.';
-    req.style.display = '';
+    if (hint) hint.textContent = 'Select one or more timing options.';
+    if (req) req.style.display = '';
   }
 });
 
@@ -418,64 +415,10 @@ async function generatePrescription() {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// TAB SWITCHING (unchanged)
-// ─────────────────────────────────────────────────────────────────────────────
-// ─────────────────────────────────────────────────────────────────────────────
-// DASHBOARD NAVIGATION
-// ─────────────────────────────────────────────────────────────────────────────
-function initNavigation() {
-  const navItems = document.querySelectorAll('.nav-item');
-  const sections = document.querySelectorAll('.page-section');
-  const sectionTargets = document.querySelectorAll('[data-section-target]');
-
-  function showSection(sectionId) {
-    // Hide all sections
-    sections.forEach(sec => sec.classList.remove('active-section'));
-    // Deactivate all nav items
-    navItems.forEach(nav => nav.classList.remove('active'));
-
-    // Show target section
-    const targetSec = document.getElementById(sectionId);
-    if (targetSec) targetSec.classList.add('active-section');
-
-    // Activate corresponding nav item
-    const targetNav = document.querySelector(`.nav-item[data-section="${sectionId}"]`);
-    if (targetNav) targetNav.classList.add('active');
-    
-    // Special case for Generator tab which is hidden in the new UI but might be triggered
-    if (sectionId === 'generatorTab') {
-      const genNav = document.getElementById('tabGenerator');
-      if (genNav) genNav.classList.add('active');
-    }
-  }
-
-  // Bind sidebar nav items
-  navItems.forEach(nav => {
-    nav.addEventListener('click', () => {
-      const targetId = nav.getAttribute('data-section');
-      if (targetId) showSection(targetId);
-    });
-  });
-
-  // Bind quick action buttons
-  sectionTargets.forEach(btn => {
-    btn.addEventListener('click', () => {
-      const targetId = btn.getAttribute('data-section-target');
-      if (targetId) showSection(targetId);
-    });
-  });
-
-  // Legacy tab overrides (if old buttons are still clicked)
-  if (tabAnalyzer) tabAnalyzer.addEventListener('click', () => showSection('scanSection'));
-  if (tabGenerator) tabGenerator.addEventListener('click', () => showSection('generatorTab'));
-}
-
 generateBtn.addEventListener('click', generatePrescription);
-document.getElementById('rxAddBtn').addEventListener('click', addOrUpdateMedicine);
+const rxAddBtn = document.getElementById('rxAddBtn');
+if (rxAddBtn) rxAddBtn.addEventListener('click', addOrUpdateMedicine);
 recordSpeechBtn.addEventListener('click', toggleSpeechRecognition);
-
-initNavigation();
 
 function showError(message) {
   output.innerHTML = `<div class="error" style="background: #fee; color: #c33; padding: 15px; border-radius: 8px; margin: 10px 0;">
@@ -818,14 +761,16 @@ if (!document.querySelector('#loading-style')) {
   document.head.appendChild(style);
 }
 
-// Keep the dashboard sections accessible through the existing navigation hooks.
+// Keep all page navigation on one delegated click handler.
 const pageSections = Array.from(document.querySelectorAll('.page-section'));
 const navigationItems = Array.from(document.querySelectorAll('.nav-item'));
-const sectionTargets = Array.from(document.querySelectorAll('[data-section-target]'));
 
 function showPageSection(sectionId) {
   const section = document.getElementById(sectionId);
-  if (!section) return;
+  if (!section || !section.classList.contains('page-section')) {
+    console.error(`Navigation target "${sectionId}" is not a page section.`);
+    return false;
+  }
 
   pageSections.forEach(pageSection => {
     pageSection.classList.toggle('active-section', pageSection === section);
@@ -836,15 +781,27 @@ function showPageSection(sectionId) {
   });
 
   section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  return true;
 }
 
-navigationItems.forEach(item => {
-  item.addEventListener('click', () => showPageSection(item.dataset.section));
-});
+if (document.documentElement.dataset.navigationInitialized !== 'true') {
+  document.documentElement.dataset.navigationInitialized = 'true';
+  document.addEventListener('click', event => {
+    const clickedElement = event.target instanceof Element
+      ? event.target.closest('.nav-item[data-section], [data-section-target]')
+      : null;
+    if (!clickedElement) return;
 
-sectionTargets.forEach(target => {
-  target.addEventListener('click', () => showPageSection(target.dataset.sectionTarget));
-});
+    const sectionId = clickedElement.dataset.sectionTarget || clickedElement.dataset.section;
+    if (!sectionId || !showPageSection(sectionId)) return;
+
+    if (sectionId === 'inventorySection') {
+      loadInventory().catch(error => console.error('Could not load inventory:', error));
+    } else if (sectionId === 'alertsSection') {
+      loadStaffAlerts().catch(error => console.error('Could not load expiry alerts:', error));
+    }
+  });
+}
 
 const staffUpdateImageInput = document.getElementById('staffUpdateImageInput');
 const staffUpdateScanBtn = document.getElementById('staffUpdateScanBtn');
@@ -992,5 +949,3 @@ editExtractedFieldsBtn.addEventListener('click', () => {
   staffUpdateStatus.textContent = 'Edit the extracted details, then save the medicine.';
 });
 inventoryRefreshBtn.addEventListener('click', loadInventory);
-document.querySelectorAll('[data-section-target="inventorySection"]').forEach(button => button.addEventListener('click', loadInventory));
-document.querySelectorAll('[data-section-target="alertsSection"]').forEach(button => button.addEventListener('click', loadStaffAlerts));
