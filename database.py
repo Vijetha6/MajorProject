@@ -1,5 +1,8 @@
 import sqlite3
+import json
+import uuid
 from pathlib import Path
+from datetime import datetime
 
 DATABASE = Path(__file__).parent / "medicine_inventory.db"
 
@@ -244,8 +247,140 @@ def get_low_stock_medicines(threshold=10):
     return [dict(medicine) for medicine in medicines]
 
 
+
+# ==================== PRESCRIPTION HISTORY ====================
+
+def init_prescription_database():
+    conn = get_connection()
+
+    try:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS prescriptions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                patient_name TEXT NOT NULL,
+                phone_number TEXT NOT NULL,
+                age TEXT,
+                gender TEXT,
+                filename TEXT NOT NULL UNIQUE,
+                download_token TEXT NOT NULL UNIQUE,
+                created_at TEXT NOT NULL,
+                doctor_name TEXT,
+                clinic_name TEXT,
+                prescription_json TEXT NOT NULL DEFAULT '{}',
+                request_id TEXT,
+                request_hash TEXT
+            )
+        """)
+
+        columns = {
+            row["name"] for row in conn.execute("PRAGMA table_info(prescriptions)")
+        }
+        migrations = {
+            "doctor_name": "TEXT",
+            "clinic_name": "TEXT",
+            "prescription_json": "TEXT NOT NULL DEFAULT '{}'",
+            "request_id": "TEXT",
+            "request_hash": "TEXT",
+        }
+        for column, definition in migrations.items():
+            if column not in columns:
+                conn.execute(f"ALTER TABLE prescriptions ADD COLUMN {column} {definition}")
+
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_prescription_phone
+            ON prescriptions(phone_number)
+        """)
+        conn.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_prescription_request_id
+            ON prescriptions(request_id)
+            WHERE request_id IS NOT NULL
+        """)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def save_prescription(data):
+    token = data.get("download_token") or uuid.uuid4().hex
+    prescription_data = data.get("prescription_data") or {}
+    conn = get_connection()
+    try:
+        cursor = conn.execute("""
+            INSERT INTO prescriptions (
+                patient_name, phone_number, age, gender, filename,
+                download_token, created_at, doctor_name, clinic_name,
+                prescription_json, request_id, request_hash
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            data["patient_name"],
+            data["phone_number"],
+            data.get("age", ""),
+            data.get("gender", ""),
+            data["filename"],
+            token,
+            datetime.now().isoformat(timespec="seconds"),
+            data.get("doctor_name"),
+            data.get("clinic_name"),
+            json.dumps(prescription_data, ensure_ascii=False),
+            data.get("request_id"),
+            data.get("request_hash"),
+        ))
+        conn.commit()
+        return cursor.lastrowid, token
+    finally:
+        conn.close()
+
+
+def get_patient_prescriptions(phone_number):
+    conn = get_connection()
+
+    rows = conn.execute("""
+        SELECT id, patient_name, age, gender, filename,
+               download_token, created_at, doctor_name, clinic_name,
+               prescription_json
+        FROM prescriptions
+        WHERE phone_number = ?
+        ORDER BY created_at DESC
+    """, (phone_number,)).fetchall()
+
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def get_prescription_by_token(token):
+    conn = get_connection()
+
+    row = conn.execute("""
+        SELECT id, patient_name, phone_number, age, gender,
+               filename, download_token, created_at, doctor_name, clinic_name,
+               prescription_json, request_id, request_hash
+        FROM prescriptions
+        WHERE download_token = ?
+    """, (token,)).fetchone()
+
+    conn.close()
+    return dict(row) if row else None
+
+
+def get_prescription_by_request_id(request_id):
+    conn = get_connection()
+    try:
+        row = conn.execute("""
+            SELECT id, patient_name, phone_number, age, gender, filename,
+                   download_token, created_at, doctor_name, clinic_name,
+                   prescription_json, request_id, request_hash
+            FROM prescriptions
+            WHERE request_id = ?
+        """, (request_id,)).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
 # ==================== INITIALIZE DATABASE ====================
 
 if __name__ == "__main__":
     init_database()
+    init_prescription_database()
     print("Medicine inventory database initialized successfully.")

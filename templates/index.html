@@ -196,17 +196,65 @@
 
         <section id="generatorTab" class="page-section prescription-section" aria-labelledby="prescriptionTitle">
           <button class="back-button" type="button" data-section-target="dashboardSection">Back to home</button>
-          <div class="section-heading"><div><p class="eyebrow">Patient care</p><h1 id="prescriptionTitle">Prescription generator</h1><p class="section-description">Create and share a digitally generated prescription.</p></div></div>
+          <div class="section-heading"><div><p class="eyebrow">Patient care</p><h1 id="prescriptionTitle">Prescription generator</h1><p class="section-description">Enter, review, and prepare a prescription for the prescribing doctor's signature.</p></div></div>
           <article class="content-card generator-card">
-            <label for="patientName">Patient Name</label><input type="text" id="patientName" placeholder="Enter patient name">
-            <label for="patientAge">Age (years)</label><input type="number" id="patientAge" min="1" max="150" placeholder="Enter age">
-            <label for="patientGender">Gender</label><select id="patientGender"><option value="">Select gender</option><option value="Male">Male</option><option value="Female">Female</option><option value="Other">Other</option></select>
-            <label for="patientPhone">Mobile Number</label><input type="tel" id="patientPhone" maxlength="10" placeholder="Enter 10-digit mobile number">
-            <label for="prescriptionText">Prescription Text</label><textarea id="prescriptionText" placeholder="Example:
-Paracetamol 500 mg once daily for 1 week
-Dolo 650 twice daily for 3 weeks"></textarea>
-            <p class="hint">Enter patient details above. The prescription only needs medicines.</p>
-            <div class="generator-actions"><button id="recordSpeechBtn" type="button" class="record-btn">Record Prescription</button><button id="generateBtn" type="button" class="generate-btn">Generate Prescription PDF</button></div>
+            <section class="rx-patient-details" aria-labelledby="rxPatientHeading">
+              <h2 id="rxPatientHeading">Patient details</h2>
+              <div class="rx-form-grid">
+                <div><label for="patientName">Patient name</label><input type="text" id="patientName" maxlength="200" autocomplete="name" required></div>
+                <div><label for="patientAge">Age (years)</label><input type="number" id="patientAge" min="1" max="150" step="1" inputmode="numeric" required></div>
+                <div><label for="patientGender">Gender</label><select id="patientGender" required><option value="">Select gender</option><option value="Male">Male</option><option value="Female">Female</option><option value="Other">Other</option></select></div>
+                <div><label for="patientPhone">Mobile number</label><input type="tel" id="patientPhone" maxlength="13" autocomplete="tel" placeholder="10-digit number or +91…" required></div>
+              </div>
+            </section>
+
+            <section id="rxEntryPanel" class="rx-entry-panel" aria-labelledby="rxEntryHeading">
+              <h2 id="rxEntryHeading">Add a medicine</h2>
+              <div class="rx-form-grid">
+                <div><label for="rxMedicineName">Medicine name</label><input type="text" id="rxMedicineName" maxlength="200" required></div>
+                <div><label for="rxDosage">Dosage</label><input type="text" id="rxDosage" maxlength="100" placeholder="Enter exactly as prescribed" required></div>
+                <div>
+                  <label for="rxDoseSchedule">Dose schedule (Morning-Afternoon-Evening-Bedtime)</label>
+                  <input type="text" id="rxDoseSchedule" maxlength="32" placeholder="Doctor-entered, e.g. 1-0-0-1" aria-describedby="rxDoseScheduleHint">
+                  <small id="rxDoseScheduleHint" class="hint">Enter only the schedule prescribed by the doctor; it is not filled automatically.</small>
+                </div>
+                <div><label for="rxFrequency">Frequency</label><select id="rxFrequency" required>
+                  <option value="">Select frequency</option><option>Once daily</option><option>Twice daily</option><option>Three times daily</option><option>Four times daily</option><option>Once weekly</option><option>Twice weekly</option><option>As needed</option>
+                </select></div>
+                <div><label for="rxDuration">Duration</label><input type="text" id="rxDuration" maxlength="100" placeholder="Enter exactly as prescribed" required></div>
+                <fieldset class="rx-timing-field">
+                  <legend>Timing <span id="rxTimingRequired">(select at least one)</span></legend>
+                  <div class="rx-checkbox-row">
+                    <label><input type="checkbox" name="rxTiming" value="Morning"> Morning</label>
+                    <label><input type="checkbox" name="rxTiming" value="Afternoon"> Afternoon</label>
+                    <label><input type="checkbox" name="rxTiming" value="Evening"> Evening</label>
+                    <label><input type="checkbox" name="rxTiming" value="Bedtime"> Bedtime</label>
+                  </div>
+                  <p id="rxTimingHint" class="hint">Select one or more timing options.</p>
+                </fieldset>
+                <div><label for="rxFood">Food instructions</label><select id="rxFood" required>
+                  <option value="">Select food instruction</option><option>Before food</option><option>With food</option><option>After food</option><option>No food instruction</option>
+                </select></div>
+                <div class="rx-special-field"><label for="rxSpecial">Special instructions (optional)</label><textarea id="rxSpecial" maxlength="500" rows="2"></textarea></div>
+              </div>
+              <p id="rxFormError" class="rx-form-error" role="alert"></p>
+              <div class="rx-entry-actions">
+                <button id="rxAddBtn" class="primary-button" type="button">Add medicine</button>
+                <button id="rxCancelEditBtn" class="secondary-button" type="button">Clear fields</button>
+                <button id="recordSpeechBtn" type="button" class="record-btn">Dictate medicine name</button>
+              </div>
+            </section>
+
+            <section class="rx-review-panel" aria-labelledby="rxReviewHeading">
+              <h2 id="rxReviewHeading">Review medicines <span class="rx-count">(<span id="rxMedicineCount">0</span>)</span></h2>
+              <div id="rxMedicineList" class="rx-medicine-list" aria-live="polite">
+                <p id="rxEmptyState" class="empty-state">No medicines added yet. Add each medicine above.</p>
+              </div>
+            </section>
+
+            <label class="rx-review-confirmation"><input type="checkbox" id="prescriptionReviewConfirmed"> I reviewed the patient details and every medicine, dosage, dose schedule, frequency, timing, food instruction, and duration. The information is correct.</label>
+            <p class="hint">Doctor and clinic details are taken from the server's .env configuration. The PDF requires the prescribing doctor's signature.</p>
+            <div class="generator-actions"><button id="generateBtn" type="button" class="generate-btn">Generate Prescription PDF</button></div>
             <p id="speechStatus" class="hint" aria-live="polite"></p>
             <div id="generatorOutput" class="output" aria-live="polite"></div>
           </article>
@@ -221,7 +269,6 @@ Dolo 650 twice daily for 3 weeks"></textarea>
   </div>
 
   <div id="toastContainer" class="toast-container" aria-live="polite" aria-atomic="true"></div>
-  <script src="/static/script.js"></script>
+  <script src="/static/script.js?v=rx-dose-schedule-20261103"></script>
 </body>
 </html>
-

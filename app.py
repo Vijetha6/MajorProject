@@ -6,6 +6,8 @@ import shutil
 import json
 import logging
 import uuid
+import hashlib
+import sqlite3
 from database import (
     init_database,
     add_medicine,
@@ -19,6 +21,17 @@ from database import (
     get_expired_medicines,
     get_low_stock_medicines
 )
+
+from database import (
+    init_prescription_database,
+    save_prescription,
+    get_patient_prescriptions,
+    get_prescription_by_token,
+    get_prescription_by_request_id,
+)
+
+
+from flask import abort
 import cv2
 import numpy as np
 import pandas as pd
@@ -34,73 +47,33 @@ from dotenv import load_dotenv
 from drive_upload import upload_pdf_to_drive
 
 try:
-    from sms import send_sms
+    from sms import send_sms, is_sms_configured
 except Exception:
     def send_sms(patient_name, phone_number, download_url):
-        return None
+        raise RuntimeError("SMS support is unavailable.")
+
+    def is_sms_configured():
+        return False
 from flask import Flask, request, jsonify, render_template, send_from_directory
 from werkzeug.utils import secure_filename
 from difflib import get_close_matches
 from datetime import datetime, timedelta
-try:
-    from fpdf import FPDF
-except Exception:
-    class FPDF:
-        def __init__(self):
-            pass
-        def add_page(self):
-            pass
-        def set_auto_page_break(self, val):
-            pass
-        def set_font(self, *args, **kwargs):
-            pass
-        def set_text_color(self, *args, **kwargs):
-            pass
-        def cell(self, *args, **kwargs):
-            pass
-        def ln(self, *args, **kwargs):
-            pass
-        def set_xy(self, *args, **kwargs):
-            pass
-        def output(self, filepath):
-            with open(filepath, 'wb') as f:
-                f.write(b'')
-        def image(self, *args, **kwargs):
-            return None
-try:
-    import qrcode
-except Exception:
-    # Minimal qrcode stub using PIL for tests
-    import types as _types
-    from PIL import Image as _Image
-
-    qrcode = _types.SimpleNamespace()
-    qrcode.constants = _types.SimpleNamespace(ERROR_CORRECT_H=1)
-
-    class _QR:
-        def __init__(self, **kwargs):
-            self.data = None
-        def add_data(self, d):
-            self.data = d
-        def make(self, fit=True):
-            return True
-        def make_image(self, fill_color="black", back_color="white"):
-            return _Image.new('RGB', (120, 120), color=back_color)
-
-    qrcode.QRCode = _QR
+from fpdf import FPDF
+import qrcode
 from PIL import Image, ImageDraw, ImageFont
 
 load_dotenv()
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
+logger = logging.getLogger(__name__)
 if genai is None:
     client = None
-    logger = logging.getLogger(__name__)
     logger.warning("google.genai not available; Gemini features disabled")
+elif not GEMINI_API_KEY:
+    client = None
+    logger.warning("GEMINI_API_KEY not set; Gemini features disabled")
 else:
-    if not GEMINI_API_KEY:
-        raise ValueError("GEMINI_API_KEY not found in .env")
     client = genai.Client(api_key=GEMINI_API_KEY)
     print("✅ Gemini Loaded")
 
@@ -108,10 +81,11 @@ else:
 # Set up logging
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
+logging.getLogger("urllib3").setLevel(logging.WARNING)
 
 app = Flask(__name__)
 init_database()
-
+init_prescription_database()
 
 UPLOAD_FOLDER = "uploads"
 GENERATED_FOLDER = "generated"
@@ -380,418 +354,484 @@ def parse_prescription(text):
         })
 
     return {
-        "name": "Patient",
-        "age": "Not set",
-        "gender": "Not set",
-        "doctor": "Dr. XYZ",
-        "clinic": "Shri XYZ Clinic",
-        "address": "xyzabc",
-        "phone": "+91 **********",
-        "email": "xyz@gmail.com",
+        "name": "",
+        "age": "",
+        "gender": "",
+        "doctor": "",
+        "clinic": "",
+        "address": "",
+        "phone": "",
+        "email": "",
         "medicines": medicines
     }
 
 
 def create_prescription_filename(patient_name):
-    safe_name = re.sub(r'[^A-Za-z0-9_]+', '_', patient_name)
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    return f'prescription_{safe_name}_{timestamp}.pdf'
+    return f"prescription_{uuid.uuid4().hex}.pdf"
+
+
+def _prescription_config():
+    return {
+        "doctor": os.getenv("DOCTOR_NAME", "").strip(),
+        "clinic": os.getenv("CLINIC_NAME", "").strip(),
+        "tagline": os.getenv("CLINIC_TAGLINE", "").strip(),
+        "address": os.getenv("CLINIC_ADDRESS", "").strip(),
+        "clinic_phone": os.getenv("CLINIC_PHONE", "").strip(),
+        "clinic_email": os.getenv("CLINIC_EMAIL", "").strip(),
+    }
+
+
+def _pdf_detail(pdf, label, value, x, y, width):
+    pdf.set_xy(x, y)
+    pdf.set_font("Arial", "B", 9)
+    pdf.cell(28, 6, label)
+    pdf.set_font("Arial", "", 9)
+    pdf.set_xy(x + 28, y)
+    pdf.multi_cell(width - 28, 6, str(value))
 
 
 def generate_prescription_pdf(data, download_url, filepath):
-    pdf = FPDF()
+    class PrescriptionPDF(FPDF):
+        def footer(self):
+            self.set_y(-13)
+            self.set_font("Arial", "I", 7)
+            self.set_text_color(100, 100, 100)
+            self.cell(
+                0,
+                5,
+                "Generated for review. The prescribing doctor must sign this prescription.",
+                0,
+                0,
+                "C",
+            )
+            self.set_text_color(0, 0, 0)
+
+    pdf = PrescriptionPDF()
+    pdf.set_margins(15, 14, 15)
+    pdf.set_auto_page_break(auto=True, margin=18)
     pdf.add_page()
-    pdf.set_auto_page_break(False)
-
-    pdf.set_font('Arial', 'B', 14)
-    pdf.set_text_color(0, 0, 128)
-    pdf.cell(0, 6, 'SHRI XYZ CLINIC', 0, 1, 'C')
-    pdf.set_font('Arial', '', 9)
+    pdf.set_text_color(25, 50, 80)
+    pdf.set_font("Arial", "B", 16)
+    pdf.multi_cell(0, 8, data["clinic"], align="C")
+    if data["tagline"]:
+        pdf.set_font("Arial", "I", 9)
+        pdf.multi_cell(0, 5, data["tagline"], align="C")
     pdf.set_text_color(0, 0, 0)
-    pdf.cell(0, 5, 'Serving Health Since 1990', 0, 1, 'C')
-    pdf.set_font('Arial', '', 8)
-    pdf.cell(0, 4, data['address'], 0, 1, 'C')
-    pdf.cell(0, 4, f"Phone: {data['phone']} | Email: {data['email']}", 0, 1, "C")
-    pdf.ln(3)
-    # ===================== DATE =====================
     pdf.set_font("Arial", "", 9)
-    pdf.set_xy(165, 28)
-    pdf.cell(30, 6, f"Date: {datetime.now().strftime('%d/%m/%Y')}", 0, 0, "R")
-
-    # ===================== DETAILS =====================
-
-    left_x = 15
-    right_x = 110
-
-    row1 = 42
-    row2 = 50
-    row3 = 58
-
-    label_w = 35
-    value_w = 50
-
-    # -------- LEFT SIDE --------
-    pdf.set_font("Arial", "B", 9)
-# Row positions
-    row1 = 42
-    row2 = 50
-    row3 = 58
-    row4 = 66
-
-# -------- LEFT SIDE --------
-
-    # Patient Name
-    pdf.set_xy(left_x, row1)
-    pdf.set_font("Arial", "B", 9)
-    pdf.cell(label_w, 6, "Patient Name:", 0, 0)
+    if data["address"]:
+        pdf.multi_cell(0, 5, data["address"], align="C")
+    contact_details = []
+    if data["clinic_phone"]:
+        contact_details.append(f"Phone: {data['clinic_phone']}")
+    if data["clinic_email"]:
+        contact_details.append(f"Email: {data['clinic_email']}")
+    if contact_details:
+        pdf.multi_cell(0, 5, "   ".join(contact_details), align="C")
+    pdf.ln(2)
+    pdf.set_font("Arial", "B", 13)
+    pdf.cell(0, 8, "PRESCRIPTION", 0, 1, "C")
     pdf.set_font("Arial", "", 9)
-    pdf.cell(value_w, 6, data["name"], 0, 0)
+    pdf.cell(0, 6, f"Date: {data['prescription_date']}", 0, 1, "R")
 
-    # Mobile Number
-    pdf.set_xy(left_x, row2)
-    pdf.set_font("Arial", "B", 9)
-    pdf.cell(label_w, 6, "Mobile No:", 0, 0)
-    pdf.set_font("Arial", "", 9)
-    pdf.cell(value_w, 6, data["phone_number"], 0, 0)
+    details_y = pdf.get_y() + 2
+    _pdf_detail(pdf, "Patient:", data["name"], 15, details_y, 85)
+    _pdf_detail(pdf, "Doctor:", data["doctor"], 110, details_y, 85)
+    _pdf_detail(pdf, "Mobile:", data["phone_number"], 15, details_y + 7, 85)
+    _pdf_detail(pdf, "Clinic:", data["clinic"], 110, details_y + 7, 85)
+    _pdf_detail(pdf, "Age:", data["age"], 15, details_y + 14, 85)
+    _pdf_detail(pdf, "Gender:", data["gender"], 110, details_y + 14, 85)
+    pdf.set_y(details_y + 23)
 
-    # Age
-    pdf.set_xy(left_x, row3)
-    pdf.set_font("Arial", "B", 9)
-    pdf.cell(label_w, 6, "Age:", 0, 0)
-    pdf.set_font("Arial", "", 9)
-    pdf.cell(value_w, 6, data["age"], 0, 0)
+    column_widths = [45, 28, 32, 38, 37]
+    headers = ["Medicine Name", "Dosage", "Dose M-A-E-B", "Frequency", "Duration"]
 
-    # Gender
-    pdf.set_xy(left_x, row4)
-    pdf.set_font("Arial", "B", 9)
-    pdf.cell(label_w, 6, "Gender:", 0, 0)
-    pdf.set_font("Arial", "", 9)
-    pdf.cell(value_w, 6, data["gender"], 0, 0)
-        # -------- RIGHT SIDE --------
+    def draw_table_header():
+        pdf.set_font("Arial", "B", 8)
+        pdf.set_fill_color(220, 232, 244)
+        for width, heading in zip(column_widths, headers):
+            pdf.cell(width, 8, heading, border=1, align="C", fill=True)
+        pdf.ln()
 
-    # Doctor Name
-    pdf.set_xy(right_x, row1)
-    pdf.set_font("Arial", "B", 9)
-    pdf.cell(label_w, 6, "Doctor Name:", 0, 0)
-    pdf.set_font("Arial", "", 9)
-    pdf.cell(0, 6, data["doctor"], 0, 0)
-
-    # Clinic
-    pdf.set_xy(right_x, row2)
-    pdf.set_font("Arial", "B", 9)
-    pdf.cell(label_w, 6, "Clinic:", 0, 0)
-    pdf.set_font("Arial", "", 9)
-    pdf.cell(0, 6, data["clinic"], 0, 0)
-
-    pdf.set_y(82)
-    pdf.set_font('Arial', 'B', 8)
-    pdf.set_fill_color(200, 220, 240)
-
-    # ── Four-column layout matching the printed prescription format ──
-    col_w = [52, 35, 50, 43]
-    headers = ['Medicine Name', 'Dosage', 'Frequency', 'Duration']
-
-    for i, h in enumerate(headers):
-        pdf.cell(col_w[i], 8, h, 1, 0, 'C', 1)
-    pdf.ln()
-
-    pdf.set_font('Arial', '', 7)
-    for med in data['medicines']:
-        # Build display strings (truncate to fit the cell)
-        name_str = str(med.get('name', ''))[:32]
-        dose_str = str(med.get('dosage', ''))[:20]
-        freq_str = str(med.get('frequency', ''))[:26]
-        timing_val = med.get('timing', [])
-        if isinstance(timing_val, list) and timing_val:
-            timing_str = ', '.join(timing_val)
-        else:
-            timing_str = '--'
-        # Break timing into two lines if long (Morning, Afternoon → two rows)
-        if len(timing_str) > 18:
-            parts = timing_val if isinstance(timing_val, list) else [timing_str]
-            mid   = (len(parts) + 1) // 2
-            timing_str = ', '.join(parts[:mid]) + '\n' + ', '.join(parts[mid:])
-        dur_str = str(med.get('duration', ''))[:18]
-
-        # Row height: use 7 for single-line, 12 if timing wraps
-        row_h = 12 if '\n' in timing_str else 7
-
-        # Save cursor Y before row so we can draw all cells at same height
-        row_y = pdf.get_y()
-        x_start = 15  # left margin
-
-        def draw_cell(col_idx, text, multiline=False):
-            pdf.set_xy(x_start + sum(col_w[:col_idx]), row_y)
-            if multiline and '\n' in text:
-                lines = text.split('\n')
-                pdf.set_xy(x_start + sum(col_w[:col_idx]), row_y)
-                pdf.rect(x_start + sum(col_w[:col_idx]), row_y, col_w[col_idx], row_h)
-                for li, line in enumerate(lines):
-                    pdf.set_xy(x_start + sum(col_w[:col_idx]) + 1,
-                               row_y + 1 + li * 5.5)
-                    pdf.cell(col_w[col_idx] - 2, 5, line.strip(), 0, 0, 'C')
-            else:
-                pdf.cell(col_w[col_idx], row_h, text, 1, 0, 'C')
-
-        draw_cell(0, name_str)
-        draw_cell(1, dose_str)
-        draw_cell(2, freq_str)
-        draw_cell(3, dur_str)
-
-        pdf.set_xy(x_start, row_y + row_h)
-
-        # Keep omitted administration details below the compact table row.
+    draw_table_header()
+    for medicine in data["medicines"]:
+        values = [
+            medicine["name"],
+            medicine["dosage"],
+            medicine.get("dose_schedule") or "-",
+            medicine["frequency"],
+            medicine["duration"],
+        ]
+        pdf.set_font("Arial", "", 8)
+        wrapped = [
+            pdf.multi_cell(width - 4, 4.5, value, split_only=True)
+            for width, value in zip(column_widths, values)
+        ]
+        row_height = max(8, max(len(lines) for lines in wrapped) * 4.5 + 3)
         notes = []
-        if timing_str != '--':
-            notes.append('Timing: ' + timing_str.replace('\n', ', '))
-        food = (med.get('food_instruction') or '').strip()
-        if food:
-            notes.append('Food: ' + food)
-        special = (med.get('special_instructions') or '').strip()
-        if special:
-            notes.append('Note: ' + special)
-        if notes:
-            pdf.set_font('Arial', 'I', 6)
-            pdf.set_fill_color(245, 245, 245)
-            note_text = ' | '.join(notes)[:145]
-            pdf.cell(sum(col_w), 5, note_text, 1, 1, 'L', 1)
+        if medicine.get("timing"):
+            notes.append("Timing: " + ", ".join(medicine["timing"]))
+        if medicine.get("food_instruction"):
+            notes.append("Food: " + medicine["food_instruction"])
+        if medicine.get("special_instructions"):
+            notes.append("Special instructions: " + medicine["special_instructions"])
+        note_text = " | ".join(notes)
+        note_lines = (
+            pdf.multi_cell(sum(column_widths) - 4, 4.5, note_text, split_only=True)
+            if note_text
+            else []
+        )
+        note_height = len(note_lines) * 4.5 + 3 if note_lines else 0
+        if pdf.get_y() + row_height + note_height > 264:
+            pdf.add_page()
+            draw_table_header()
+        row_y = pdf.get_y()
+        for index, (width, value, lines) in enumerate(zip(column_widths, values, wrapped)):
+            x = 15 + sum(column_widths[:index])
+            pdf.rect(x, row_y, width, row_height)
+            pdf.set_xy(x + 2, row_y + 1.5)
+            pdf.multi_cell(width - 4, 4.5, value, align="L")
+        pdf.set_y(row_y + row_height)
+        if note_text:
+            pdf.set_font("Arial", "I", 8)
+            pdf.set_fill_color(248, 250, 252)
+            pdf.multi_cell(sum(column_widths), 4.5, note_text, border=1, fill=True)
             pdf.set_fill_color(255, 255, 255)
-            pdf.set_font('Arial', '', 7)
 
-    pdf.ln(5)
-
-    # ================= DIGITAL SIGNATURE =================
-
-    # Create signature image
-    # ================= DIGITAL SIGNATURE =================
-
-    box_x = 15
-    box_y = 220
-    box_w = 60
-    box_h = 18
-
-    # Heading
-    pdf.set_xy(box_x, box_y - 7)
+    if pdf.get_y() > 235:
+        pdf.add_page()
+    else:
+        pdf.ln(10)
+    signature_y = pdf.get_y()
     pdf.set_font("Arial", "B", 9)
-    pdf.set_text_color(0, 0, 0)
-    pdf.cell(0, 5, "Digital Signature:")
-
-    # Signature Box
-    pdf.rect(box_x, box_y, box_w, box_h)
-
-    # Signature Text
-    pdf.set_text_color(0, 102, 204)
+    pdf.cell(90, 6, "Doctor's signature:", 0, 0)
+    pdf.cell(0, 6, "Scan to download", 0, 1, "C")
     pdf.set_font("Arial", "", 9)
+    pdf.cell(90, 8, "________________________________", 0, 1)
+    pdf.cell(90, 6, data["doctor"], 0, 0)
 
-    pdf.set_xy(box_x + 2, box_y + 2)
-    pdf.cell(0, 4, "Digitally Signed", ln=1)
-
-    pdf.set_x(box_x + 2)
-    pdf.cell(0, 4, data["doctor"], ln=1)
-
-    pdf.set_x(box_x + 2)
-    pdf.cell(0, 4, datetime.now().strftime("%d/%m/%y %H:%M"), ln=1)
-
-    # Reset text color
-    pdf.set_text_color(0, 0, 0)
-
-
-    qr_x = 155
-    qr_y = 220
-
-    pdf.set_xy(qr_x, qr_y - 6)
-    pdf.set_font("Arial", "B", 8)
-    pdf.cell(35, 5, "Scan to Download", 0, 1, "C")
-
-    # ================= CREATE QR CODE =================
-
-    qr = qrcode.QRCode(
-        version=2,
-        error_correction=qrcode.constants.ERROR_CORRECT_H,
-        box_size=4,
-        border=2
-    )
-
-    qr.add_data(download_url)
-    qr.make(fit=True)
-
-    qr_img = qr.make_image(fill_color="black", back_color="white")
-
-    qr_path = os.path.join(
-        GENERATED_FOLDER,
-        f"qr_{uuid.uuid4().hex[:8]}.png"
-    )
-
-    qr_img.save(qr_path)
-
-    pdf.image(qr_path, x=qr_x, y=qr_y, w=35, h=35)
-
-    pdf.set_y(278)
-    pdf.set_font('Arial', 'I', 7)
-    pdf.set_text_color(100, 100, 100)
-    pdf.cell(0, 4, 'This is a system-generated prescription. Valid with digital signature.', 0, 0, 'C')
-
-    pdf.output(filepath)
+    qr_path = os.path.join(GENERATED_FOLDER, f".qr_{uuid.uuid4().hex}.png")
+    try:
+        qr = qrcode.QRCode(
+            error_correction=qrcode.constants.ERROR_CORRECT_M,
+            box_size=4,
+            border=2,
+        )
+        qr.add_data(download_url)
+        qr.make(fit=True)
+        qr.make_image(fill_color="black", back_color="white").save(qr_path)
+        pdf.image(qr_path, x=155, y=signature_y + 6, w=30, h=30)
+        pdf.output(filepath)
+    finally:
+        if os.path.exists(qr_path):
+            os.remove(qr_path)
 
 
 
 @app.route('/generate-prescription', methods=['POST'])
 def generate_prescription():
+    filepath = None
     try:
-        if request.is_json:
-            payload = request.get_json()
-        else:
-            payload = request.form.to_dict()
+        payload = request.get_json(silent=True) if request.is_json else request.form.to_dict()
+        if not isinstance(payload, dict):
+            return jsonify({"error": "A valid JSON or form request is required."}), 400
 
-        patient_name = (payload.get("patient_name") or "").strip()
-        age          = (payload.get("age")          or "").strip()
-        gender       = (payload.get("gender")       or "").strip()
-        phone_number = (payload.get("phone_number") or "").strip()
+        def required_text(value, label, max_length):
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"{label} is required.")
+            if len(value) > max_length:
+                raise ValueError(f"{label} must be {max_length} characters or fewer.")
+            if any(ord(char) < 32 and char not in "\t" for char in value):
+                raise ValueError(f"{label} contains unsupported control characters.")
+            return value.strip()
 
-        # ── Validate shared patient fields ──────────────────────────────────
-        if not patient_name:
-            return jsonify({'error': 'Patient name is required.'}), 400
-        if not age:
-            return jsonify({'error': 'Age is required.'}), 400
-        if not gender:
-            return jsonify({'error': 'Gender is required.'}), 400
-        if not phone_number:
-            return jsonify({'error': 'Phone number is required.'}), 400
+        patient_name = required_text(payload.get("patient_name"), "Patient name", 200)
+        age = required_text(payload.get("age"), "Age", 3)
+        if not age.isdecimal() or not 1 <= int(age) <= 150:
+            return jsonify({"error": "Age must be a whole number between 1 and 150."}), 400
 
-        try:
-            age_int = int(age)
-            if age_int < 1 or age_int > 150:
-                return jsonify({'error': 'Age must be between 1 and 150.'}), 400
-        except ValueError:
-            return jsonify({'error': 'Age must be a valid number.'}), 400
+        gender = required_text(payload.get("gender"), "Gender", 20)
+        if gender not in {"Male", "Female", "Other"}:
+            return jsonify({"error": "Select Male, Female, or Other for gender."}), 400
 
-        # ── PATH A: Structured medicines[] supplied by new frontend ──────────
+        phone_number = required_text(payload.get("phone_number"), "Mobile number", 16)
+        if re.fullmatch(r"[6-9]\d{9}", phone_number):
+            phone_number = "+91" + phone_number
+        elif not re.fullmatch(r"\+91[6-9]\d{9}", phone_number):
+            return jsonify({"error": "Enter a valid 10-digit Indian mobile number, optionally prefixed with +91."}), 400
+
         medicines_raw = payload.get("medicines")
-
-        if medicines_raw and isinstance(medicines_raw, list) and len(medicines_raw) > 0:
-            # Validate each medicine object
+        legacy_text = payload.get("text")
+        legacy_request = medicines_raw is None and isinstance(legacy_text, str)
+        if legacy_request:
+            legacy_lines = [line.strip() for line in legacy_text.splitlines() if line.strip()]
+            if not legacy_lines:
+                return jsonify({"error": "Add at least one medicine before generating the prescription."}), 400
             medicines_list = []
-            for idx, m in enumerate(medicines_raw):
-                if not isinstance(m, dict):
-                    return jsonify({'error': f'Medicine #{idx+1} has invalid format.'}), 400
-
-                name    = (m.get("name")    or "").strip()
-                dosage  = (m.get("dosage")  or "").strip()
-                frequency = (m.get("frequency") or "").strip()
-                food_instruction = (m.get("food_instruction") or "").strip()
-                duration = (m.get("duration") or "").strip()
-                timing  = m.get("timing", [])
-                special = (m.get("special_instructions") or "").strip()
-
-                if not name:
-                    return jsonify({'error': f'Medicine #{idx+1}: name is required.'}), 400
-                if not dosage:
-                    return jsonify({'error': f'Medicine #{idx+1}: dosage is required.'}), 400
-                if not frequency:
-                    return jsonify({'error': f'Medicine #{idx+1}: frequency is required.'}), 400
-                if not food_instruction:
-                    return jsonify({'error': f'Medicine #{idx+1}: food instruction is required.'}), 400
-                if not duration:
-                    return jsonify({'error': f'Medicine #{idx+1}: duration is required.'}), 400
-                if not isinstance(timing, list):
-                    timing = []
-
-                medicines_list.append({
-                    "name":                name,
-                    "dosage":              dosage,
-                    "frequency":           frequency,
-                    "timing":              timing,
-                    "food_instruction":    food_instruction,
-                    "duration":            duration,
-                    "special_instructions": special,
-                })
-
-            # Build the data dict for PDF generation (structured path)
-            data = {
-                "name":         patient_name,
-                "age":          age + " years",
-                "gender":       gender,
-                "phone_number": "+91" + phone_number,
-                "doctor":       "Dr. XYZ",
-                "clinic":       "Shri XYZ Clinic",
-                "address":      "xyzabc",
-                "phone":        "+91 **********",
-                "email":        "xyz@gmail.com",
-                "medicines":    medicines_list,
-            }
-
-        # ── PATH B: Legacy free-text (old frontend / backward compat) ────────
-        else:
-            text = (payload.get("text") or "").strip()
-
-            if not text:
-                return jsonify({
-                    'error': 'Please add at least one medicine before generating the prescription.'
-                }), 400
-
-            cleaned = clean_prescription_text(text)
-
-            if not validate_prescription_text(cleaned):
-                return jsonify({
-                    'error': 'Invalid prescription text. Please include at least one medicine.'
-                }), 400
-
-            data = parse_prescription(cleaned)
-
-            # Override with manually entered patient details
-            data["name"]         = patient_name
-            data["age"]          = age + " years"
-            data["gender"]       = gender
-            data["phone_number"] = "+91" + phone_number
-
-        # ── Generate PDF (same for both paths) ───────────────────────────────
-        filename          = create_prescription_filename(data["name"])
-        filepath          = os.path.join(GENERATED_FOLDER, filename)
-        local_download_url = request.host_url.rstrip("/") + "/download/" + filename
-
-        generate_prescription_pdf(data, local_download_url, filepath)
-
-        if not os.path.exists(filepath):
-            raise FileNotFoundError(f"Generated prescription PDF not found at: {filepath}")
-        if os.path.getsize(filepath) <= 0:
-            raise ValueError(f"Generated prescription PDF is empty: {filepath}")
-
-        # ── Keep local download available when Google Drive is not configured ─
-        drive_url = None
-        try:
-            drive_url = upload_pdf_to_drive(filepath)
-        except Exception as exc:
-            logger.warning("Google Drive upload skipped for %s: %s", filepath, exc)
-
-        # ── Send SMS ─────────────────────────────────────────────────────────
-        try:
-            if data.get("name") and data.get("phone_number") and drive_url:
-                send_sms(
-                    patient_name=data["name"],
-                    phone_number=data["phone_number"],
-                    download_url=drive_url
+            frequency_pattern = (
+                r"(?:once daily|once a day|once per day|twice daily|twice a day|"
+                r"twice per day|thrice daily|three times a day|once weekly|"
+                r"once per week|twice weekly|twice per week|as needed)"
+            )
+            for index, line in enumerate(legacy_lines, start=1):
+                duration_match = re.search(
+                    r"\bfor\s+(\d+\s+(?:days?|weeks?|months?))\s*\.?$",
+                    line,
+                    re.IGNORECASE,
                 )
-        except Exception as e:
-            logger.error(f"SMS send failed: {e}")
+                if not duration_match:
+                    return jsonify({"error": f"Legacy medicine line {index} must include a frequency and duration; use the structured form if it cannot be parsed exactly."}), 400
+                before_duration = line[:duration_match.start()].rstrip()
+                frequency_match = re.search(
+                    rf"\b({frequency_pattern})\s*$",
+                    before_duration,
+                    re.IGNORECASE,
+                )
+                if not frequency_match:
+                    return jsonify({"error": f"Legacy medicine line {index} must include a recognized frequency."}), 400
+                medicine_and_dosage = before_duration[:frequency_match.start()].rstrip()
+                dosage_match = re.search(
+                    r"(?P<dosage>\d+(?:\.\d+)?\s*(?:mg|mcg|g|ml|tablet|tablets|tab|capsule|capsules))$",
+                    medicine_and_dosage,
+                    re.IGNORECASE,
+                )
+                if not dosage_match:
+                    return jsonify({"error": f"Legacy medicine line {index} must include a dosage with units."}), 400
+                name = medicine_and_dosage[:dosage_match.start()].strip()
+                if not name:
+                    return jsonify({"error": f"Legacy medicine line {index} is missing the medicine name."}), 400
+                medicines_list.append({
+                    "name": name,
+                    "dosage": dosage_match.group("dosage"),
+                    "dose_schedule": "",
+                    "frequency": frequency_match.group(1),
+                    "timing": [],
+                    "food_instruction": "Not specified in legacy text",
+                    "duration": duration_match.group(1),
+                    "special_instructions": "",
+                })
+        else:
+            if not isinstance(medicines_raw, list) or not medicines_raw:
+                return jsonify({"error": "Add at least one medicine before generating the prescription."}), 400
+            if len(medicines_raw) > 50:
+                return jsonify({"error": "A prescription can contain at most 50 medicines."}), 400
+            if payload.get("review_confirmed") is not True:
+                return jsonify({"error": "Review the patient details and all medicines, then confirm before generating."}), 400
+
+            medicines_list = []
+            valid_timings = {"Morning", "Afternoon", "Evening", "Bedtime"}
+            for index, medicine in enumerate(medicines_raw, start=1):
+                if not isinstance(medicine, dict):
+                    return jsonify({"error": f"Medicine #{index} has an invalid format."}), 400
+                try:
+                    name = required_text(medicine.get("name"), f"Medicine #{index} name", 200)
+                    dosage = required_text(medicine.get("dosage"), f"Medicine #{index} dosage", 100)
+                    frequency = required_text(medicine.get("frequency"), f"Medicine #{index} frequency", 100)
+                    food = required_text(medicine.get("food_instruction"), f"Medicine #{index} food instruction", 100)
+                    duration = required_text(medicine.get("duration"), f"Medicine #{index} duration", 100)
+                    special = medicine.get("special_instructions", "")
+                    if not isinstance(special, str) or len(special) > 500:
+                        raise ValueError(f"Medicine #{index} special instructions must be 500 characters or fewer.")
+                    dose_schedule = medicine.get("dose_schedule", "")
+                    if not isinstance(dose_schedule, str) or len(dose_schedule) > 32:
+                        raise ValueError(f"Medicine #{index} dose schedule must be 32 characters or fewer.")
+                    dose_schedule = dose_schedule.strip()
+                    if dose_schedule and not re.fullmatch(
+                        r"\d+(?:\.\d+)?(?:[- ]+\d+(?:\.\d+)?){3}",
+                        dose_schedule,
+                    ):
+                        raise ValueError(
+                            f"Medicine #{index} dose schedule must contain four values in Morning-Afternoon-Evening-Bedtime order, such as 1-0-0-1 or 1 0 0 1."
+                        )
+                    if "\n" in name or "\r" in name or "\n" in dosage or "\r" in dosage:
+                        raise ValueError(f"Medicine #{index} name and dosage must each be a single line.")
+                    timing = medicine.get("timing", [])
+                    if not isinstance(timing, list) or any(
+                        not isinstance(item, str) or item not in valid_timings for item in timing
+                    ):
+                        raise ValueError(f"Medicine #{index} has an invalid timing selection.")
+                    if len(set(timing)) != len(timing):
+                        raise ValueError(f"Medicine #{index} timing selections must not be duplicated.")
+                    if frequency.casefold() != "as needed" and not timing:
+                        raise ValueError(f"Medicine #{index} requires at least one timing selection.")
+                    medicines_list.append({
+                        "name": name,
+                        "dosage": dosage,
+                        "dose_schedule": dose_schedule,
+                        "frequency": frequency,
+                        "timing": timing,
+                        "food_instruction": food,
+                        "duration": duration,
+                        "special_instructions": special.strip(),
+                    })
+                except ValueError as exc:
+                    return jsonify({"error": str(exc)}), 400
+
+        config = _prescription_config()
+        config_keys = {
+            "doctor": "DOCTOR_NAME",
+            "clinic": "CLINIC_NAME",
+            "tagline": "CLINIC_TAGLINE",
+            "address": "CLINIC_ADDRESS",
+            "clinic_phone": "CLINIC_PHONE",
+            "clinic_email": "CLINIC_EMAIL",
+        }
+        required_config = ("doctor", "clinic")
+        missing_config = [key for key in required_config if not config[key]]
+        if missing_config:
+            missing_names = ", ".join(config_keys[key] for key in missing_config)
+            return jsonify({
+                "error": f"Prescription clinic configuration is incomplete. Set these values in .env: {missing_names}."
+            }), 503
+
+        data = {
+            "name": patient_name,
+            "age": f"{age} years",
+            "gender": gender,
+            "phone_number": phone_number,
+            "doctor": config["doctor"],
+            "clinic": config["clinic"],
+            "tagline": config["tagline"],
+            "address": config["address"],
+            "clinic_phone": config["clinic_phone"],
+            "clinic_email": config["clinic_email"],
+            "prescription_date": datetime.now().strftime("%d/%m/%Y"),
+            "medicines": medicines_list,
+        }
+        canonical_request = {
+            key: data[key]
+            for key in (
+                "name", "age", "gender", "phone_number", "doctor", "clinic",
+                "tagline", "address", "clinic_phone", "clinic_email", "medicines",
+            )
+        }
+        request_hash = hashlib.sha256(
+            json.dumps(canonical_request, sort_keys=True, ensure_ascii=False).encode("utf-8")
+        ).hexdigest()
+
+        request_id = request.headers.get("Idempotency-Key") or payload.get("request_id")
+        if request_id is None:
+            request_id = uuid.uuid4().hex
+        if not isinstance(request_id, str) or not re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", request_id):
+            return jsonify({"error": "Idempotency-Key must contain 1-128 letters, digits, dots, underscores, colons, or hyphens."}), 400
+
+        existing = get_prescription_by_request_id(request_id)
+        if existing:
+            if existing["request_hash"] != request_hash:
+                return jsonify({"error": "This request key was already used for different prescription details."}), 409
+            return jsonify(_prescription_response(existing, request.host_url)), 200
+
+        public_base_url = os.getenv("PUBLIC_BASE_URL", "").strip().rstrip("/")
+        if public_base_url and not re.fullmatch(r"https?://[^/\s]+(?:/[^ \s]*)?", public_base_url):
+            return jsonify({"error": "PUBLIC_BASE_URL must be an absolute http(s) URL."}), 503
+        download_base_url = public_base_url or request.host_url.rstrip("/")
+        download_token = uuid.uuid4().hex
+        secure_download_url = (
+            f"{download_base_url}/patient/prescriptions/download/{download_token}"
+        )
+        filename = create_prescription_filename(patient_name)
+        filepath = os.path.join(GENERATED_FOLDER, filename)
+        os.makedirs(GENERATED_FOLDER, exist_ok=True)
+        generate_prescription_pdf(data, secure_download_url, filepath)
+
+        if not os.path.isfile(filepath) or os.path.getsize(filepath) < 100:
+            raise RuntimeError("The PDF could not be generated as a valid non-empty document.")
+        with open(filepath, "rb") as pdf_file:
+            if pdf_file.read(5) != b"%PDF-":
+                raise RuntimeError("The generated file is not a valid PDF.")
+
+        try:
+            prescription_id, _ = save_prescription({
+                "patient_name": patient_name,
+                "phone_number": phone_number,
+                "age": data["age"],
+                "gender": gender,
+                "filename": filename,
+                "download_token": download_token,
+                "doctor_name": config["doctor"],
+                "clinic_name": config["clinic"],
+                "prescription_data": data,
+                "request_id": request_id,
+                "request_hash": request_hash,
+            })
+        except sqlite3.IntegrityError:
+            existing = get_prescription_by_request_id(request_id)
+            if existing:
+                os.remove(filepath)
+                filepath = None
+                if existing["request_hash"] == request_hash:
+                    return jsonify(_prescription_response(existing, request.host_url)), 200
+                return jsonify({
+                    "error": "This request key was already used for different prescription details."
+                }), 409
+            raise
+
+        drive_url = None
+        if os.getenv("GOOGLE_DRIVE_UPLOAD_ENABLED", "").strip().casefold() == "true":
+            try:
+                drive_url = upload_pdf_to_drive(filepath)
+            except Exception:
+                logger.exception("Google Drive upload failed; local prescription remains available.")
+
+        sms_url = drive_url or (secure_download_url if public_base_url else None)
+        if is_sms_configured() and phone_number and sms_url:
+            try:
+                send_sms(patient_name, phone_number, sms_url)
+            except Exception:
+                logger.exception("SMS delivery failed; local prescription remains available.")
 
         return jsonify({
-            "success":            True,
-            "download_url":       local_download_url,
-            "local_download_url": local_download_url,
-            "drive_url":          drive_url,
-            "filename":           filename,
-            "patient":            data["name"],
-            "phone_number":       data["phone_number"],
-            "age":                data["age"],
-            "gender":             data["gender"],
-            "medicines":          data["medicines"],
-        })
-
+            "success": True,
+            "download_url": secure_download_url,
+            "local_download_url": secure_download_url,
+            "drive_url": drive_url,
+            "filename": filename,
+            "patient": patient_name,
+            "phone_number": phone_number,
+            "age": data["age"],
+            "gender": gender,
+            "medicines": medicines_list,
+            "prescription_id": prescription_id,
+        }), 201
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
     except Exception as e:
         logger.exception("Prescription generation failed")
-        return jsonify({
-            'error': 'Prescription generation failed. ' + str(e)
-        }), 500
+        if filepath and os.path.exists(filepath):
+            try:
+                os.remove(filepath)
+            except OSError:
+                logger.exception("Could not remove incomplete prescription PDF.")
+        return jsonify({"error": "Prescription generation failed. Please check the server logs."}), 500
+
+
+def _prescription_response(record, request_host):
+    download_base_url = (
+        os.getenv("PUBLIC_BASE_URL", "").strip().rstrip("/")
+        or request_host.rstrip("/")
+    )
+    download_url = (
+        download_base_url
+        + "/patient/prescriptions/download/"
+        + record["download_token"]
+    )
+    try:
+        stored_data = json.loads(record.get("prescription_json") or "{}")
+    except (TypeError, json.JSONDecodeError):
+        stored_data = {}
+    return {
+        "success": True,
+        "duplicate": True,
+        "download_url": download_url,
+        "local_download_url": download_url,
+        "drive_url": None,
+        "filename": record["filename"],
+        "patient": record["patient_name"],
+        "phone_number": record["phone_number"],
+        "age": record["age"],
+        "gender": record["gender"],
+        "medicines": stored_data.get("medicines", []),
+        "prescription_id": record["id"],
+    }
 
 
 @app.route('/generated/<path:filename>')
@@ -804,6 +844,89 @@ def download_file(filename):
         GENERATED_FOLDER,
         filename,
         as_attachment=True
+    )
+
+
+# ==================== PATIENT PRESCRIPTION HISTORY ====================
+
+@app.route("/patient/prescriptions", methods=["GET"])
+def patient_prescriptions():
+    """
+    Return prescription history for a phone number.
+
+    Security note: This endpoint is NOT authenticated – it requires only a
+    phone number which is not a secret.  Do NOT use in production without
+    adding OTP / session authentication.  The endpoint is intentionally
+    limited to metadata; actual PDF bytes are only served via the opaque
+    per-prescription token.
+    """
+    phone_number = (
+        request.args.get("phone_number")
+        or request.args.get("phone")
+        or ""
+    ).strip()
+    if not phone_number:
+        return jsonify({"error": "phone_number query parameter is required."}), 400
+
+    try:
+        records = get_patient_prescriptions(phone_number)
+        # Strip filename from the public response – clients should use the token.
+        safe_records = [
+            {
+                "id":             r["id"],
+                "patient_name":   r["patient_name"],
+                "age":            r["age"],
+                "gender":         r["gender"],
+                "created_at":     r["created_at"],
+                "download_token": r["download_token"],
+            }
+            for r in records
+        ]
+        return jsonify({"count": len(safe_records), "prescriptions": safe_records}), 200
+    except Exception as e:
+        logger.exception("Failed to retrieve patient prescriptions")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/patient/prescriptions/download/<token>", methods=["GET"])
+def patient_prescription_download(token):
+    """
+    Download a prescription PDF by its opaque token.
+
+    The token is a 32-character hex string generated at prescription-creation
+    time.  Guessing it is computationally infeasible.
+    """
+    # Validate token format to prevent unexpected DB lookups.
+    if not re.fullmatch(r"[0-9a-f]{32}", token):
+        abort(404)
+
+    try:
+        record = get_prescription_by_token(token)
+    except Exception as e:
+        logger.exception("DB error during token lookup")
+        return jsonify({"error": "Internal server error."}), 500
+
+    if record is None:
+        abort(404)
+
+    filename = record["filename"]
+    # Prevent directory traversal: strip any path components.
+    from werkzeug.utils import secure_filename as _sfn
+    safe_name = _sfn(filename)
+    if not safe_name or safe_name != filename:
+        logger.warning("Suspicious filename rejected: %s", filename)
+        abort(404)
+
+    pdf_path = os.path.join(GENERATED_FOLDER, safe_name)
+    if not os.path.isfile(pdf_path):
+        return jsonify({"error": "PDF file not found on server."}), 404
+
+    return send_from_directory(
+        GENERATED_FOLDER,
+        safe_name,
+        as_attachment=True,
+        download_name=safe_name,
+        mimetype="application/pdf",
     )
 
 
@@ -1001,6 +1124,9 @@ def extract_medicine_name(text):
     if not text:
         return None
 
+    if re.search(r"\bPARACIP\b", text, re.IGNORECASE):
+        return "Paracip-500"
+
     # First, prefer brand/product-style candidates with numbers, strengths, or uppercase brand text.
     candidate = None
 
@@ -1067,6 +1193,70 @@ def extract_medicine_name(text):
                 return matches[0]
 
     return None
+
+
+def extract_labeled_expiry_date(text):
+    """Prefer a date explicitly labeled as expiry over manufacturing dates."""
+    if not text:
+        return "NOT FOUND"
+
+    month_numbers = {
+        "JAN": "01", "FEB": "02", "MAR": "03", "APR": "04",
+        "MAY": "05", "JUN": "06", "JUL": "07", "AUG": "08",
+        "SEP": "09", "OCT": "10", "NOV": "11", "DEC": "12",
+    }
+    months = "|".join(month_numbers)
+    match = re.search(
+        rf"(?:\bEXP(?:IRY)?\b|2XP)\s*[A-Z]{{0,2}}[^A-Z0-9]{{0,2}}"
+        rf"({months})\s*[^A-Z0-9]{{0,2}}(20\d{{2}}|\d{{2}})\b",
+        text.upper(),
+    )
+    if not match:
+        return "NOT FOUND"
+
+    year = match.group(2)
+    if len(year) == 2:
+        year = f"20{year}"
+    return f"{month_numbers[match.group(1)]}/{year}"
+
+
+def build_local_medicine_info(ocr_text, medicine_name, expiry_date):
+    """Return only medicine details supported by local OCR or a known label."""
+    brand_name = medicine_name or "Not detected"
+    generic_name = "Information not available"
+    strength = "Information not available"
+    dosage_form = "Information not available"
+
+    if re.search(r"\bPARACIP\b", ocr_text, re.IGNORECASE):
+        brand_name = "Paracip-500"
+        generic_name = "Paracetamol"
+        strength = "500 mg"
+        dosage_form = "Tablet"
+    else:
+        strength_match = re.search(
+            r"\b(\d+(?:\.\d+)?)\s*(mg|mcg|g|ml)\b",
+            ocr_text,
+            re.IGNORECASE,
+        )
+        if strength_match:
+            strength = f"{strength_match.group(1)} {strength_match.group(2).lower()}"
+        if re.search(r"\b(TABLET|TABLETS|TAB)\b", ocr_text, re.IGNORECASE):
+            dosage_form = "Tablet"
+        elif re.search(r"\b(CAPSULE|CAPSULES|CAP)\b", ocr_text, re.IGNORECASE):
+            dosage_form = "Capsule"
+
+    labeled_expiry = extract_labeled_expiry_date(ocr_text)
+    return {
+        "brand_name": brand_name,
+        "generic_name": generic_name,
+        "strength": strength,
+        "dosage_form": dosage_form,
+        "expiry_date": labeled_expiry if labeled_expiry != "NOT FOUND" else expiry_date,
+        "uses": ["Information not available"],
+        "side_effects": ["Information not available"],
+        "alternatives": ["Information not available"],
+        "source": "Local OCR",
+    }
 
 
 
@@ -2212,6 +2402,12 @@ def process_image():
                     if not medicine_name and medicine_ocr:
                         medicine_name = extract_medicine_name(medicine_ocr)
 
+                labeled_expiry = extract_labeled_expiry_date(
+                    f"{expiry_ocr} {medicine_ocr}"
+                )
+                if labeled_expiry != "NOT FOUND":
+                    expiry_date = labeled_expiry
+
                 # =====================================================
                 # GEMINI: Send OCR text (not just medicine name)
                 # =====================================================
@@ -2224,17 +2420,11 @@ def process_image():
                     )
 
                     if not medicine_info:
-                        medicine_info = {
-                            'brand_name': medicine_name or 'Not detected',
-                            'generic_name': 'Information not available',
-                            'strength': 'Information not available',
-                            'dosage_form': 'Information not available',
-                            'expiry_date': expiry_date,
-                            'uses': ['Information not available'],
-                            'side_effects': ['Information not available'],
-                            'alternatives': ['Information not available'],
-                            'source': 'Gemini (error)'
-                        }
+                        medicine_info = build_local_medicine_info(
+                            medicine_ocr,
+                            medicine_name,
+                            expiry_date,
+                        )
 
                     gemini_expiry = medicine_info.get('expiry_date', '')
                     if expiry_date == "NOT FOUND" and gemini_expiry not in {
@@ -2623,18 +2813,18 @@ def medicine_location_api(medicine_id):
 
 if __name__ == '__main__':
     print("\n" + "="*60)
-    print("🚀 Medicine Detection API Started")
+    print("Medicine Detection API Started")
     print("="*60)
-    print("\n📤 Upload medicine images to extract:")
-    print("   • Medicine name (YOLO + OCR)")
-    print("   • Expiry date (YOLO + OCR)")
-    print("   • Generic name (Gemini)")
-    print("   • Uses (Gemini)")
-    print("   • Side effects (Gemini)")
-    print("   • Alternatives (Gemini)")
-    print("\n📡 DATA SOURCE: Gemini + YOLO + OCR")
-    print("\n🌐 Web interface: http://localhost:5000")
-    print("📡 API endpoint: http://localhost:5000/process")
+    print("\nUpload medicine images to extract:")
+    print("   - Medicine name (YOLO + OCR)")
+    print("   - Expiry date (YOLO + OCR)")
+    print("   - Generic name (Gemini)")
+    print("   - Uses (Gemini)")
+    print("   - Side effects (Gemini)")
+    print("   - Alternatives (Gemini)")
+    print("\nDATA SOURCE: Gemini + YOLO + OCR")
+    print("\nWeb interface: http://localhost:5000")
+    print("API endpoint: http://localhost:5000/process")
     print("\n" + "="*60 + "\n")
     
     # Use environment variables for debug mode and host

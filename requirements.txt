@@ -1,6 +1,6 @@
 Flask==2.3.3
-opencv-python==4.13.0.92
-numpy==2.4.2
+opencv-python==4.8.0.76
+numpy==1.26.4
 pytesseract==0.3.13
 easyocr==1.7.1
 roboflow==1.1.13
@@ -11,6 +11,7 @@ requests==2.31.0
 Werkzeug==2.3.7
 Pillow==10.1.0
 fpdf==1.7.2
+pypdf==6.21.4
 qrcode==7.3.1
 python-dotenv==1.2.1
 google-genai

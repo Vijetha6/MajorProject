@@ -1,37 +1,38 @@
-from twilio.rest import Client
 import os
 from dotenv import load_dotenv
 
 load_dotenv()
 
-client = Client(
-    os.getenv("TWILIO_ACCOUNT_SID"),
-    os.getenv("TWILIO_AUTH_TOKEN")
-)
+
+def is_sms_configured():
+    return all(os.getenv(key, "").strip() for key in (
+        "TWILIO_ACCOUNT_SID",
+        "TWILIO_AUTH_TOKEN",
+        "TWILIO_PHONE_NUMBER",
+    ))
 
 def send_sms(patient_name, phone_number, download_url):
+    if not is_sms_configured():
+        raise RuntimeError("Twilio SMS is not configured.")
 
-    body = f"""
-Shri XYZ Clinic
+    if not phone_number or not phone_number.startswith("+"):
+        raise ValueError("SMS recipient must be a valid E.164 phone number.")
 
-Dear {patient_name},
+    from twilio.rest import Client
 
-Your prescription is ready.
-
-Download:
-{download_url}
-
-Regards,
-Dr. XYZ
-"""
+    client = Client(
+        os.environ["TWILIO_ACCOUNT_SID"],
+        os.environ["TWILIO_AUTH_TOKEN"],
+    )
+    body = (
+        f"Dear {patient_name}, your prescription is ready. "
+        f"Download: {download_url}"
+    )
 
     message = client.messages.create(
         body=body,
-        from_=os.getenv("TWILIO_PHONE_NUMBER"),
-        to=phone_number
+        from_=os.environ["TWILIO_PHONE_NUMBER"],
+        to=phone_number,
     )
-
-    print("SMS Sent Successfully!")
-    print("Message SID:", message.sid)
 
     return message.sid

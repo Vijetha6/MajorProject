@@ -1023,6 +1023,10 @@ body:has(#generatorTab.active) #scanSection { display: none; }
 #tabGenerator { margin-left: 4px; }
 #tabGenerator.active { background: #2563eb; color: #fff; }
 
+#generatorTab #generatorOutput:not(:empty) {
+  display: block;
+}
+
 #scanSection {
   margin-top: 12px;
 }
@@ -1240,6 +1244,165 @@ main > #tabGenerator,
   cursor: pointer;
 }
 
+.rx-patient-details,
+.rx-entry-panel,
+.rx-review-panel {
+  margin: 18px 0;
+  padding: 14px;
+  border: 1px solid var(--line);
+  background: #fff;
+}
+
+.rx-patient-details h2,
+.rx-entry-panel h2,
+.rx-review-panel h2 {
+  margin-bottom: 12px;
+  font-size: 15px;
+}
+
+.rx-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  align-items: start;
+}
+
+.rx-form-grid > div,
+.rx-special-field {
+  min-width: 0;
+}
+
+.rx-form-grid label,
+.rx-timing-field legend {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.rx-form-grid input,
+.rx-form-grid select,
+.rx-special-field textarea {
+  width: 100%;
+  min-height: 36px;
+  padding: 8px;
+  font-size: 12px;
+}
+
+.rx-special-field textarea {
+  min-height: 58px;
+  margin: 0;
+  resize: vertical;
+}
+
+.rx-timing-field {
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid var(--line);
+}
+
+.rx-checkbox-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.rx-checkbox-row label,
+.rx-review-confirmation {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--ink);
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.rx-checkbox-row input,
+.rx-review-confirmation input {
+  width: auto;
+  min-height: auto;
+  margin: 0;
+}
+
+.rx-entry-actions,
+.rx-download-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-top: 12px;
+}
+
+.rx-entry-actions button,
+.secondary-button {
+  min-height: 34px;
+  padding: 7px 10px;
+  font-size: 11px;
+}
+
+.rx-form-error {
+  min-height: 16px;
+  margin-top: 8px;
+  color: #b91c1c;
+  font-size: 11px;
+}
+
+.rx-medicine-list {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.rx-table {
+  min-width: 780px;
+}
+
+.rx-table td {
+  white-space: normal;
+  vertical-align: top;
+}
+
+.rx-special-note {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.rx-action-cell {
+  white-space: nowrap !important;
+}
+
+.rx-action-cell button {
+  margin: 2px;
+  padding: 4px 7px;
+}
+
+.rx-count {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.rx-review-confirmation {
+  margin: 8px 0;
+  line-height: 1.5;
+}
+
+.rx-download-link {
+  display: inline-block;
+  padding: 10px 12px;
+  border-radius: 5px;
+  background: var(--blue);
+  color: #fff;
+  font-size: 11px;
+  text-decoration: none;
+}
+
+@media (max-width: 460px) {
+  .rx-form-grid { grid-template-columns: 1fr; }
+  .rx-patient-details,
+  .rx-entry-panel,
+  .rx-review-panel { padding: 10px; }
+}
+
 #scanSection.active-section .section-heading,
 #generatorTab.active-section .section-heading,
 #inventorySection.active-section .section-heading,
@@ -1357,4 +1520,19 @@ main > #tabGenerator,
   #alertsSection.active-section .alert-grid {
     grid-template-columns: 1fr;
   }
+}
+
+.rx-special-field textarea {
+  min-height: 58px;
+  margin: 0;
+  resize: vertical;
+}
+
+.rx-review-confirmation {
+  display: flex;
+}
+
+.rx-medicine-list .empty-state {
+  display: block;
+  padding: 10px 0;
 }

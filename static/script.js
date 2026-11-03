@@ -10,12 +10,27 @@ const generateBtn = document.getElementById('generateBtn');
 const generatorOutput = document.getElementById('generatorOutput');
 const recordSpeechBtn = document.getElementById('recordSpeechBtn');
 const speechStatus = document.getElementById('speechStatus');
+const prescriptionReviewConfirmed = document.getElementById('prescriptionReviewConfirmed');
 
 // ── E-Prescription structured medicine data ──────────────────────────────────
 let medicines = [];       // Array of structured medicine objects
 let rxEditingIndex = -1;  // -1 = adding new; ≥0 = editing existing entry
 let recognition = null;
 let recognizing = false;
+let prescriptionRequestId = null;
+
+function resetPrescriptionReview() {
+  prescriptionReviewConfirmed.checked = false;
+  prescriptionRequestId = null;
+  generatorOutput.textContent = '';
+}
+
+function createPrescriptionRequestId() {
+  if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+    return window.crypto.randomUUID();
+  }
+  return `rx-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
 
 
 document.querySelector('.upload-btn').addEventListener('click', (e) => {
@@ -113,9 +128,11 @@ submitBtn.addEventListener('click', async () => {
 });
 
 function showGeneratorError(message) {
-  generatorOutput.innerHTML = `<div class="error" style="background: #fee; color: #c33; padding: 15px; border-radius: 8px; margin: 10px 0;">
-    ⚠️ ${message}
-  </div>`;
+  const error = document.createElement('div');
+  error.className = 'error';
+  error.setAttribute('role', 'alert');
+  error.textContent = `⚠️ ${message}`;
+  generatorOutput.replaceChildren(error);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -132,6 +149,7 @@ function rxGetTiming() {
 function clearMedicineForm() {
   document.getElementById('rxMedicineName').value = '';
   document.getElementById('rxDosage').value       = '';
+  document.getElementById('rxDoseSchedule').value = '';
   document.getElementById('rxFrequency').value    = '';
   document.getElementById('rxFood').value         = '';
   document.getElementById('rxDuration').value     = '';
@@ -143,6 +161,10 @@ function clearMedicineForm() {
   document.getElementById('rxFormError').textContent = '';
   document.getElementById('rxAddBtn').textContent = '+ Add Medicine';
   rxEditingIndex = -1;
+  const hint = document.getElementById('rxTimingHint');
+  const required = document.getElementById('rxTimingRequired');
+  hint.textContent = 'Select one or more timing options.';
+  required.style.display = '';
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -164,6 +186,7 @@ if (rxFrequency) rxFrequency.addEventListener('change', function () {
     if (hint) hint.textContent = 'Select one or more timing options.';
     if (req) req.style.display = '';
   }
+  resetPrescriptionReview();
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -171,20 +194,20 @@ if (rxFrequency) rxFrequency.addEventListener('change', function () {
 // ─────────────────────────────────────────────────────────────────────────────
 function renderMedicineList() {
   const listEl   = document.getElementById('rxMedicineList');
-  const emptyEl  = document.getElementById('rxEmptyState');
   const countEl  = document.getElementById('rxMedicineCount');
   countEl.textContent = medicines.length;
 
   if (medicines.length === 0) {
-    listEl.innerHTML = '';
-    listEl.appendChild(emptyEl);
-    emptyEl.style.display = '';
+    const emptyEl = document.createElement('p');
+    emptyEl.id = 'rxEmptyState';
+    emptyEl.className = 'empty-state';
+    emptyEl.textContent = 'No medicines added yet. Add each medicine above.';
+    listEl.replaceChildren(emptyEl);
     return;
   }
-  emptyEl.style.display = 'none';
 
   let html = '<table class="rx-table"><thead><tr>'
-    + '<th>#</th><th>Medicine</th><th>Dosage</th><th>Frequency</th>'
+    + '<th>#</th><th>Medicine</th><th>Dosage</th><th>Dose M-A-E-B</th><th>Frequency</th>'
     + '<th>Timing</th><th>Food</th><th>Duration</th><th>Actions</th>'
     + '</tr></thead><tbody>';
 
@@ -195,6 +218,7 @@ function renderMedicineList() {
       <td>${i + 1}</td>
       <td>${escapeHtml(m.name)}${special}</td>
       <td>${escapeHtml(m.dosage)}</td>
+      <td>${escapeHtml(m.dose_schedule || '—')}</td>
       <td>${escapeHtml(m.frequency)}</td>
       <td>${escapeHtml(timing)}</td>
       <td>${escapeHtml(m.food_instruction)}</td>
@@ -216,6 +240,7 @@ function renderMedicineList() {
 function addOrUpdateMedicine() {
   const name      = document.getElementById('rxMedicineName').value.trim();
   const dosage    = document.getElementById('rxDosage').value.trim();
+  const doseSchedule = document.getElementById('rxDoseSchedule').value.trim();
   const frequency = document.getElementById('rxFrequency').value.trim();
   const food      = document.getElementById('rxFood').value.trim();
   const duration  = document.getElementById('rxDuration').value.trim();
@@ -232,6 +257,11 @@ function addOrUpdateMedicine() {
   if (!dosage) {
     errEl.textContent = '⚠️ Dosage is required.';
     document.getElementById('rxDosage').focus();
+    return;
+  }
+  if (doseSchedule && !/^\d+(?:\.\d+)?(?:[- ]+\d+(?:\.\d+)?){3}$/.test(doseSchedule)) {
+    errEl.textContent = 'Dose schedule must use four doctor-entered values in Morning-Afternoon-Evening-Bedtime order, for example 1-0-0-1 or 1 0 0 1.';
+    document.getElementById('rxDoseSchedule').focus();
     return;
   }
   if (!frequency) {
@@ -255,7 +285,7 @@ function addOrUpdateMedicine() {
   }
   errEl.textContent = '';
 
-  const entry = { name, dosage, frequency, timing, food_instruction: food, duration, special_instructions: special };
+  const entry = { name, dosage, dose_schedule: doseSchedule, frequency, timing, food_instruction: food, duration, special_instructions: special };
 
   if (rxEditingIndex >= 0) {
     medicines[rxEditingIndex] = entry;
@@ -265,6 +295,7 @@ function addOrUpdateMedicine() {
 
   clearMedicineForm();
   renderMedicineList();
+  resetPrescriptionReview();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -276,6 +307,7 @@ function editMedicine(index) {
 
   document.getElementById('rxMedicineName').value = m.name;
   document.getElementById('rxDosage').value       = m.dosage;
+  document.getElementById('rxDoseSchedule').value = m.dose_schedule || '';
   document.getElementById('rxFrequency').value    = m.frequency;
   document.getElementById('rxFood').value         = m.food_instruction;
   document.getElementById('rxDuration').value     = m.duration;
@@ -302,6 +334,7 @@ function editMedicine(index) {
   rxEditingIndex = index;
   document.getElementById('rxAddBtn').textContent = '✔ Update Medicine';
   document.getElementById('rxFormError').textContent = '';
+  resetPrescriptionReview();
   // Scroll form into view
   document.getElementById('rxEntryPanel').scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
@@ -316,15 +349,16 @@ function removeMedicine(index) {
 
   medicines.splice(index, 1);
   renderMedicineList();
+  resetPrescriptionReview();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PRESCRIPTION GENERATOR: send structured data to Flask
 // ─────────────────────────────────────────────────────────────────────────────
 async function generatePrescription() {
-  const patientName  = document.getElementById('patientName').value.trim();
-  const patientAge   = document.getElementById('patientAge').value.trim();
-  const patientGender = document.getElementById('patientGender').value.trim();
+  const patientName  = document.getElementById('patientName').value;
+  const patientAge   = document.getElementById('patientAge').value;
+  const patientGender = document.getElementById('patientGender').value;
   const patientPhone  = document.getElementById('patientPhone').value.trim();
 
   // Patient field validation (unchanged)
@@ -335,8 +369,13 @@ async function generatePrescription() {
     return;
   }
   if (!patientGender) { showGeneratorError('Please select patient gender.'); return; }
-  if (!/^[6-9]\d{9}$/.test(patientPhone)) {
-    showGeneratorError('Please enter a valid 10-digit mobile number.');
+  if (!/^(?:\+91)?[6-9]\d{9}$/.test(patientPhone)) {
+    showGeneratorError('Please enter a valid 10-digit Indian mobile number, optionally prefixed with +91.');
+    return;
+  }
+
+  if (rxEditingIndex >= 0) {
+    showGeneratorError('Finish updating or clear the medicine being edited before generating.');
     return;
   }
 
@@ -346,20 +385,30 @@ async function generatePrescription() {
     return;
   }
 
+  if (!prescriptionReviewConfirmed.checked) {
+    showGeneratorError('Review the patient and medicine list, then confirm it before generating.');
+    return;
+  }
+
   generateBtn.disabled = true;
   generateBtn.textContent = 'Generating…';
   generatorOutput.innerHTML = '';
+  if (!prescriptionRequestId) prescriptionRequestId = createPrescriptionRequestId();
 
   try {
     const res = await fetch('/generate-prescription', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'Idempotency-Key': prescriptionRequestId
+      },
       body: JSON.stringify({
         patient_name:  patientName,
         age:           patientAge,
         gender:        patientGender,
         phone_number:  patientPhone,
-        medicines:     medicines          // structured array – NO "text" field
+        medicines:     medicines,
+        review_confirmed: true
       })
     });
 
@@ -368,7 +417,7 @@ async function generatePrescription() {
     try {
       data = JSON.parse(raw);
     } catch (parseErr) {
-      showGeneratorError(`Server returned invalid JSON:\n${raw}`);
+      showGeneratorError(`Server returned an invalid response (HTTP ${res.status}).`);
       console.error('Invalid JSON from /generate-prescription:', raw);
       return;
     }
@@ -391,7 +440,7 @@ async function generatePrescription() {
 
     generatorOutput.innerHTML = `
       <div class="medicine-card">
-        <h3>✅ Prescription Generated</h3>
+        <h3>✅ Prescription prepared for signature</h3>
         <p><b>Patient:</b> ${escapeHtml(data.patient)}</p>
         <p><b>Mobile:</b>  ${escapeHtml(data.phone_number)}</p>
         <p><b>Age:</b>     ${escapeHtml(data.age)}</p>
@@ -418,7 +467,33 @@ async function generatePrescription() {
 generateBtn.addEventListener('click', generatePrescription);
 const rxAddBtn = document.getElementById('rxAddBtn');
 if (rxAddBtn) rxAddBtn.addEventListener('click', addOrUpdateMedicine);
+document.getElementById('rxCancelEditBtn').addEventListener('click', () => {
+  clearMedicineForm();
+  resetPrescriptionReview();
+});
 recordSpeechBtn.addEventListener('click', toggleSpeechRecognition);
+
+[
+  'patientName',
+  'patientAge',
+  'patientGender',
+  'patientPhone',
+  'rxMedicineName',
+  'rxDosage',
+  'rxDoseSchedule',
+  'rxFrequency',
+  'rxFood',
+  'rxDuration',
+  'rxSpecial'
+].forEach((id) => {
+  const field = document.getElementById(id);
+  field.addEventListener('input', resetPrescriptionReview);
+  field.addEventListener('change', resetPrescriptionReview);
+});
+
+document.querySelectorAll('input[name="rxTiming"]').forEach((field) => {
+  field.addEventListener('change', resetPrescriptionReview);
+});
 
 function showError(message) {
   output.innerHTML = `<div class="error" style="background: #fee; color: #c33; padding: 15px; border-radius: 8px; margin: 10px 0;">
