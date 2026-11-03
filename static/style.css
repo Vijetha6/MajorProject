@@ -1326,7 +1326,38 @@ main > #tabGenerator,
   letter-spacing: 0.08em;
 }
 
-.legacy-location-search { display: none; }
+.staff-text-search input {
+  flex: 1;
+  min-height: 36px;
+  padding: 8px 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.staff-or-text {
+  margin: 4px 0;
+  text-align: center;
+  color: #64748b;
+  font-size: 11px;
+}
+
+.staff-location-item {
+  display: grid;
+  gap: 7px;
+}
+
+.staff-location-item + .staff-location-item {
+  padding-top: 10px;
+  border-top: 1px solid #bae6fd;
+}
+
+.staff-location-item span:nth-child(2) {
+  color: #0f766e;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}.legacy-location-search { display: none; }
 .staff-update-form-card { margin-bottom: 16px; }
 .low-stock-monitor { margin-top: 16px; }
 
