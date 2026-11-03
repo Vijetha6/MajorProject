@@ -173,7 +173,12 @@
           <div class="staff-tabs"><button class="staff-tab" type="button" data-section-target="inventorySection">Update Medicine</button><button class="staff-tab active" type="button" data-section-target="addMedicineSection">Search Location</button><button class="staff-tab" type="button" data-section-target="alertsSection">Expiry Monitor</button></div>
           <button class="back-button" type="button" data-section-target="dashboardSection">Back to home</button>
           <h2 id="addMedicineTitle">Search Location</h2>
-          <p class="staff-help">Scan a medicine image to find its stored row and column/rack.</p>
+          <p class="staff-help">Type a medicine name, or scan a medicine image, to find its stored row and column/rack.</p>
+<div class="staff-scan-row staff-text-search">
+  <input id="staffLocationSearchInput" type="text" placeholder="Enter medicine name (e.g., Cilnidipine)" autocomplete="off">
+  <button id="staffLocationSearchBtn" class="primary-button" type="button">Search</button>
+</div>
+<p class="staff-or-text">or</p>
           <div class="staff-scan-row">
             <label for="staffLocationImageInput" class="upload-zone staff-upload-zone">📤 Upload / Scan Medicine Image</label>
             <input id="staffLocationImageInput" type="file" accept="image/*" hidden>

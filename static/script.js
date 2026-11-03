@@ -810,6 +810,8 @@ const staffLocationImageInput = document.getElementById('staffLocationImageInput
 const staffLocationScanBtn = document.getElementById('staffLocationScanBtn');
 const staffLocationStatus = document.getElementById('staffLocationStatus');
 const staffLocationResult = document.getElementById('staffLocationResult');
+const staffLocationSearchInput = document.getElementById('staffLocationSearchInput');
+const staffLocationSearchBtn = document.getElementById('staffLocationSearchBtn');
 const addMedicineForm = document.getElementById('addMedicineForm');
 const editExtractedFieldsBtn = document.getElementById('editExtractedFieldsBtn');
 const inventoryTableBody = document.getElementById('inventoryTableBody');
@@ -898,7 +900,31 @@ async function scanForLocation() {
     staffLocationScanBtn.disabled = false;
   }
 }
+function renderLocationResults(medicines) {
+  staffLocationResult.innerHTML = medicines.map(medicine =>
+    `<div class="staff-location-item"><strong>${escapeHtml(medicine.medicine_name)}</strong><span>LOCATION FOUND</span><span>Row: ${escapeHtml(medicine.row_number ?? 'Not stored')}</span><span>Column / Rack: ${escapeHtml(medicine.column_number ?? 'Not stored')}</span></div>`
+  ).join('');
+  staffLocationResult.hidden = false;
+}
 
+async function searchLocationByName() {
+  const name = staffLocationSearchInput.value.trim();
+  staffLocationResult.hidden = true;
+  if (!name) { staffLocationStatus.textContent = 'Please enter a medicine name.'; return; }
+  staffLocationStatus.textContent = 'Searching...';
+  staffLocationSearchBtn.disabled = true;
+  try {
+    const response = await fetch(`/search-medicine?q=${encodeURIComponent(name)}`);
+    const data = await response.json();
+    if (!response.ok || !data.medicines || !data.medicines.length) throw new Error('Medicine was not found in inventory.');
+    renderLocationResults(data.medicines);
+    staffLocationStatus.textContent = '';
+  } catch (error) {
+    staffLocationStatus.textContent = error.message;
+  } finally {
+    staffLocationSearchBtn.disabled = false;
+  }
+}
 async function saveStaffMedicine(event) {
   event.preventDefault();
   const formData = new FormData(addMedicineForm);
@@ -943,6 +969,8 @@ async function loadStaffAlerts() {
 
 staffUpdateScanBtn.addEventListener('click', scanForStaffUpdate);
 staffLocationScanBtn.addEventListener('click', scanForLocation);
+staffLocationSearchBtn.addEventListener('click', searchLocationByName);
+staffLocationSearchInput.addEventListener('keydown', e => { if (e.key === 'Enter') searchLocationByName(); });
 addMedicineForm.addEventListener('submit', saveStaffMedicine);
 editExtractedFieldsBtn.addEventListener('click', () => {
   setStaffFieldsEditable(true);
