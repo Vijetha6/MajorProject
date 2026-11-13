@@ -1,5 +1,6 @@
 import os
 import sys
+import json
 
 # Ensure project root is on sys.path so 'app' can be imported
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -19,11 +20,15 @@ class FakeModels:
             def __init__(self, text):
                 self.text = text
         sample = json.dumps({
-            "medicine_name": kwargs.get('contents', 'Unknown').split('\n')[3].split(':')[-1].strip()[:50],
             "generic_name": "Information not available",
+            "brand_name": "Information not available",
+            "strength": "Information not available",
+            "dosage_form": "Information not available",
+            "expiry_date": "Information not available",
             "uses": ["Information not available"],
             "side_effects": ["Information not available"],
-            "alternatives": ["Information not available"]
+            "same_ingredient_alternatives": [],
+            "other_drug_options": []
         })
         return R(sample)
 

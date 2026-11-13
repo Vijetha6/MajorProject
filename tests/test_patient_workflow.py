@@ -1,0 +1,277 @@
+from pathlib import Path
+from urllib.parse import urlsplit
+
+import pytest
+
+import doctor_database
+import app as app_module
+
+
+@pytest.fixture
+def doctor_client(tmp_path, monkeypatch):
+    database_path = tmp_path / "doctor-test.db"
+    monkeypatch.setattr(doctor_database, "DATABASE", database_path)
+    doctor_database.init_database()
+
+    generated_folder = tmp_path / "generated"
+    generated_folder.mkdir()
+    monkeypatch.setattr(app_module, "GENERATED_FOLDER", str(generated_folder))
+
+    def write_test_pdf(data, download_url, filepath):
+        Path(filepath).write_bytes(b"%PDF-1.4 test prescription")
+
+    monkeypatch.setattr(app_module, "generate_prescription_pdf", write_test_pdf)
+    monkeypatch.setattr(app_module, "upload_pdf_to_drive", lambda filepath: None)
+    monkeypatch.setattr(app_module, "send_sms", lambda **kwargs: None)
+
+    client = app_module.app.test_client()
+    with client.session_transaction() as app_session:
+        app_session["role"] = "doctor"
+        app_session["user_id"] = "DOC-TEST"
+    return client, generated_folder
+
+
+def register_patient(client, name="Asha Rao", mobile="9876543210"):
+    response = client.post(
+        "/doctor/patients",
+        json={
+            "patient_name": name,
+            "age": 38,
+            "gender": "Female",
+            "mobile_number": mobile,
+            "address": "Bengaluru",
+        },
+    )
+    assert response.status_code == 201
+    return response.get_json()["patient"]
+
+
+def create_visit(client, patient_id, medicines, **extra):
+    payload = {"patient_id": patient_id, "medicines": medicines}
+    payload.update(extra)
+    return client.post("/generate-prescription", json=payload)
+
+
+def test_search_patient_by_id_mobile_and_missing_result(doctor_client):
+    client, _ = doctor_client
+    patient = register_patient(client)
+
+    by_id = client.get(
+        f"/doctor/patients/search?patient_id={patient['patient_id']}"
+    )
+    by_mobile = client.get(
+        "/doctor/patients/search?mobile_number=%2B91%209876543210"
+    )
+    missing = client.get("/doctor/patients/search?patient_id=PT-MISSING")
+
+    assert by_id.get_json()["patients"][0]["patient_id"] == patient["patient_id"]
+    assert by_mobile.get_json()["patients"][0]["patient_id"] == patient["patient_id"]
+    assert missing.get_json()["patients"] == []
+    patient_history = client.get(
+        f"/doctor/patients/{patient['patient_id']}/history"
+    ).get_json()["visits"]
+    assert patient_history == []
+
+
+def test_duplicate_registration_returns_existing_patient_instead_of_creating_one(doctor_client):
+    client, _ = doctor_client
+    patient = register_patient(client)
+
+    duplicate = client.post(
+        "/doctor/patients",
+        json={
+            "patient_name": "asha rao",
+            "age": 38,
+            "gender": "Female",
+            "mobile_number": "9876543210",
+            "address": "",
+        },
+    )
+
+    assert duplicate.status_code == 409
+    assert duplicate.get_json()["existing_patients"][0]["patient_id"] == patient["patient_id"]
+    assert len(doctor_database.search_patients(patient_id=patient["patient_id"])) == 1
+
+
+def test_new_patient_starts_without_history_and_can_be_retrieved(doctor_client):
+    client, _ = doctor_client
+    patient = register_patient(client, name="New Patient", mobile="9876500000")
+    history = client.get(f"/doctor/patients/{patient['patient_id']}/history")
+
+    assert patient["patient_id"].startswith("PT-")
+    assert history.status_code == 200
+    assert history.get_json()["visits"] == []
+
+
+def test_patient_registration_rejects_invalid_age_and_mobile(doctor_client):
+    client, _ = doctor_client
+    response = client.post(
+        "/doctor/patients",
+        json={
+            "patient_name": "Invalid Patient",
+            "age": 20.5,
+            "gender": "Other",
+            "mobile_number": "not-a-number",
+            "address": "",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "age" in response.get_json()["field_errors"]
+    assert "mobile_number" in response.get_json()["field_errors"]
+
+
+def test_visits_keep_patient_doctor_and_pdf_links_and_old_medicines_are_not_copied(
+    doctor_client,
+):
+    client, generated_folder = doctor_client
+    patient = register_patient(client)
+    first_response = create_visit(
+        client,
+        patient["patient_id"],
+        [{"name": "Medicine A", "dosage": "10 mg", "frequency": "Daily"}],
+        diagnosis="Initial visit",
+    )
+    assert first_response.status_code == 200
+    first_visit = first_response.get_json()
+
+    second_response = create_visit(
+        client,
+        patient["patient_id"],
+        [{"name": "Medicine B", "dosage": "20 mg", "frequency": "Twice daily"}],
+        diagnosis="Follow-up",
+    )
+    assert second_response.status_code == 200
+    second_visit = second_response.get_json()
+    another_patient = register_patient(
+        client,
+        name="Another Patient",
+        mobile="9876500002",
+    )
+
+    history = client.get(f"/doctor/patients/{patient['patient_id']}/history")
+    visits = history.get_json()["visits"]
+    pdf_response = client.get(urlsplit(second_visit["download_url"]).path)
+    wrong_patient_pdf = client.get(
+        f"/doctor/patients/{another_patient['patient_id']}/visits/{second_visit['visit_id']}/pdf"
+    )
+    wrong_patient_visit = client.get(
+        f"/doctor/patients/{another_patient['patient_id']}/visits/{second_visit['visit_id']}"
+    )
+
+    assert len(visits) == 2
+    assert visits[0]["visit_id"] == second_visit["visit_id"]
+    assert visits[1]["visit_id"] == first_visit["visit_id"]
+    assert visits[0]["doctor_id"] == "DOC-TEST"
+    assert [medicine["medicine_name"] for medicine in visits[0]["medicines"]] == [
+        "Medicine B"
+    ]
+    assert [medicine["medicine_name"] for medicine in visits[1]["medicines"]] == [
+        "Medicine A"
+    ]
+    assert pdf_response.status_code == 200
+    assert pdf_response.data.startswith(b"%PDF")
+    assert wrong_patient_pdf.status_code == 404
+    assert wrong_patient_visit.status_code == 404
+    assert len(list(generated_folder.glob("*.pdf"))) == 2
+
+
+def test_mobile_change_keeps_history_attached_to_patient_id(doctor_client):
+    client, _ = doctor_client
+    patient = register_patient(client)
+    saved = create_visit(
+        client,
+        patient["patient_id"],
+        [{"name": "Medicine A", "dosage": "10 mg"}],
+    )
+    changed = client.put(
+        f"/doctor/patients/{patient['patient_id']}",
+        json={"mobile_number": "9876500001"},
+    )
+    history = client.get(f"/doctor/patients/{patient['patient_id']}/history")
+
+    assert changed.status_code == 200
+    assert changed.get_json()["patient"]["mobile_number"] == "9876500001"
+    assert history.get_json()["patient"]["patient_id"] == patient["patient_id"]
+    assert history.get_json()["visits"][0]["visit_id"] == saved.get_json()["visit_id"]
+
+
+def test_saving_transcription_does_not_run_interaction_analysis(doctor_client, monkeypatch):
+    client, generated_folder = doctor_client
+    patient = register_patient(client)
+    prescription_text = "Paracetamol 500 mg twice daily for 5 days after food"
+    monkeypatch.setattr(
+        app_module,
+        "analyze_medicine_interactions",
+        lambda *args: pytest.fail("Prescription saving must not run interaction analysis."),
+    )
+
+    response = client.post(
+        "/generate-prescription",
+        json={"patient_id": patient["patient_id"], "text": prescription_text},
+    )
+
+    assert response.status_code == 200
+    result = response.get_json()
+    assert result["patient_id"] == patient["patient_id"]
+    assert result["doctor_id"] == "DOC-TEST"
+    assert result["visit_id"]
+    assert list(generated_folder.glob("*.pdf"))
+    visit = doctor_database.get_patient_history(patient["patient_id"])[0]
+    assert visit["patient_id"] == patient["patient_id"]
+    assert visit["doctor_id"] == "DOC-TEST"
+    assert visit["visit_date"]
+    assert visit["pdf_path"] == result["filename"]
+    assert visit["notes"] == prescription_text
+
+
+def test_interaction_analysis_requires_explicit_history_review(doctor_client):
+    client, _ = doctor_client
+    response = client.post(
+        "/doctor/interactions/analyze",
+        json={
+            "current_medicines": [],
+            "medicines": [{"name": "Medicine A"}],
+        },
+    )
+
+    assert response.status_code == 400
+    assert "medication history was reviewed" in response.get_json()["error"]
+
+
+def test_shared_clinic_doctor_access_is_role_guarded(doctor_client):
+    client, _ = doctor_client
+    patient = register_patient(client)
+    with client.session_transaction() as app_session:
+        app_session["user_id"] = "DOC-SECOND"
+    assert client.get(
+        f"/doctor/patients/{patient['patient_id']}/history"
+    ).status_code == 200
+
+    with client.session_transaction() as app_session:
+        app_session["role"] = "medical_staff"
+    assert client.get("/doctor/patients/search?patient_id=PT-1").status_code == 403
+    assert client.post("/doctor/patients", json={}).status_code == 403
+
+
+def test_unauthenticated_patient_endpoints_are_denied(doctor_client):
+    client, _ = doctor_client
+    with client.session_transaction() as app_session:
+        app_session.clear()
+
+    assert client.get("/doctor/patients/search?patient_id=PT-1").status_code == 401
+    assert client.post("/doctor/patients", json={}).status_code == 401
+
+
+def test_doctor_dashboard_renders_patient_workflow(doctor_client):
+    client, _ = doctor_client
+    response = client.get("/doctor/dashboard")
+
+    assert response.status_code == 200
+    assert b"Search patient" in response.data
+    assert b"Register new patient" in response.data
+    assert b"Voice-to-text prescription" in response.data
+    assert b"Analyze interactions" not in response.data
+    assert b"Current medication confirmation" not in response.data
+    assert b"diagnosisInput" not in response.data
+    assert b"visitNotesInput" not in response.data

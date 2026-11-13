@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="{{ role_name }} sign in for the Medicine Toolkit">
+  <title>{{ role_name }} Login | Medicine Toolkit</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body class="auth-page">
+  <main class="auth-card">
+    <a class="auth-brand" href="{{ url_for('index') }}">MEDICINE TOOLKIT</a>
+    <p class="auth-eyebrow">Secure workspace</p>
+    <h1>{{ role_name }} Login</h1>
+    <p class="auth-description">Sign in with your {{ role_name.lower() }} account to continue.</p>
+    {% if error %}
+    <p class="auth-error" role="alert">{{ error }}</p>
+    {% endif %}
+    <form method="post" class="auth-form">
+      <label for="user_id">{{ id_label }}</label>
+      <input id="user_id" name="user_id" type="text" autocomplete="username" required autofocus>
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" required>
+      <button class="auth-submit" type="submit">Sign in</button>
+    </form>
+    <a class="auth-back-button" href="{{ url_for('index') }}">Back</a>
+  </main>
+</body>
+</html>

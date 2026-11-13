@@ -10,10 +10,9 @@ const generateBtn = document.getElementById('generateBtn');
 const generatorOutput = document.getElementById('generatorOutput');
 const recordSpeechBtn = document.getElementById('recordSpeechBtn');
 const speechStatus = document.getElementById('speechStatus');
+let selectedPatient = null;
+let selectedPatientVisits = [];
 
-// ── E-Prescription structured medicine data ──────────────────────────────────
-let medicines = [];       // Array of structured medicine objects
-let rxEditingIndex = -1;  // -1 = adding new; ≥0 = editing existing entry
 let recognition = null;
 let recognizing = false;
 
@@ -119,306 +118,312 @@ function showGeneratorError(message) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// MEDICINE FORM: helper to read timing checkboxes
+// PRESCRIPTION GENERATOR: save reviewed voice-to-text content to Flask
 // ─────────────────────────────────────────────────────────────────────────────
-function rxGetTiming() {
-  return Array.from(document.querySelectorAll('input[name="rxTiming"]:checked'))
-              .map(cb => cb.value);
+function prescriptionInput() {
+  const prescriptionText = document.getElementById('prescriptionText').value.trim();
+  if (!prescriptionText) throw new Error('Record a prescription before saving.');
+  return { text: prescriptionText };
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// MEDICINE FORM: clear all entry fields
-// ─────────────────────────────────────────────────────────────────────────────
-function clearMedicineForm() {
-  document.getElementById('rxMedicineName').value = '';
-  document.getElementById('rxDosage').value       = '';
-  document.getElementById('rxFrequency').value    = '';
-  document.getElementById('rxFood').value         = '';
-  document.getElementById('rxDuration').value     = '';
-  document.getElementById('rxSpecial').value      = '';
-  document.querySelectorAll('input[name="rxTiming"]').forEach(cb => {
-    cb.checked  = false;
-    cb.disabled = false;
+const prescriptionTextField = document.getElementById('prescriptionText');
+if (prescriptionTextField) {
+  prescriptionTextField.addEventListener('input', () => {
+    generateBtn.disabled = !prescriptionTextField.value.trim();
   });
-  document.getElementById('rxFormError').textContent = '';
-  document.getElementById('rxAddBtn').textContent = '+ Add Medicine';
-  rxEditingIndex = -1;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// MEDICINE FORM: frequency change → disable/enable timing checkboxes
-// ─────────────────────────────────────────────────────────────────────────────
-const rxFrequency = document.getElementById('rxFrequency');
-if (rxFrequency) rxFrequency.addEventListener('change', function () {
-  const isAsNeeded = this.value === 'As needed';
-  document.querySelectorAll('input[name="rxTiming"]').forEach(cb => {
-    cb.disabled = isAsNeeded;
-    if (isAsNeeded) cb.checked = false;
-  });
-  const hint = document.getElementById('rxTimingHint');
-  const req  = document.getElementById('rxTimingRequired');
-  if (isAsNeeded) {
-    if (hint) hint.textContent = 'Timing not applicable for "As needed" frequency.';
-    if (req) req.style.display = 'none';
-  } else {
-    if (hint) hint.textContent = 'Select one or more timing options.';
-    if (req) req.style.display = '';
-  }
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-// MEDICINE FORM: render the added-medicines list
-// ─────────────────────────────────────────────────────────────────────────────
-function renderMedicineList() {
-  const listEl   = document.getElementById('rxMedicineList');
-  const emptyEl  = document.getElementById('rxEmptyState');
-  const countEl  = document.getElementById('rxMedicineCount');
-  countEl.textContent = medicines.length;
-
-  if (medicines.length === 0) {
-    listEl.innerHTML = '';
-    listEl.appendChild(emptyEl);
-    emptyEl.style.display = '';
-    return;
-  }
-  emptyEl.style.display = 'none';
-
-  let html = '<table class="rx-table"><thead><tr>'
-    + '<th>#</th><th>Medicine</th><th>Dosage</th><th>Frequency</th>'
-    + '<th>Timing</th><th>Food</th><th>Duration</th><th>Actions</th>'
-    + '</tr></thead><tbody>';
-
-  medicines.forEach((m, i) => {
-    const timing  = (m.timing && m.timing.length) ? m.timing.join(', ') : '—';
-    const special = m.special_instructions ? `<br><em class="rx-special-note">Note: ${escapeHtml(m.special_instructions)}</em>` : '';
-    html += `<tr>
-      <td>${i + 1}</td>
-      <td>${escapeHtml(m.name)}${special}</td>
-      <td>${escapeHtml(m.dosage)}</td>
-      <td>${escapeHtml(m.frequency)}</td>
-      <td>${escapeHtml(timing)}</td>
-      <td>${escapeHtml(m.food_instruction)}</td>
-      <td>${escapeHtml(m.duration)}</td>
-      <td class="rx-action-cell">
-        <button class="rx-edit-btn" onclick="editMedicine(${i})" type="button">Edit</button>
-        <button class="rx-remove-btn" onclick="removeMedicine(${i})" type="button">Remove</button>
-      </td>
-    </tr>`;
-  });
-
-  html += '</tbody></table>';
-  listEl.innerHTML = html;
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// MEDICINE FORM: add or update a medicine entry
-// ─────────────────────────────────────────────────────────────────────────────
-function addOrUpdateMedicine() {
-  const name      = document.getElementById('rxMedicineName').value.trim();
-  const dosage    = document.getElementById('rxDosage').value.trim();
-  const frequency = document.getElementById('rxFrequency').value.trim();
-  const food      = document.getElementById('rxFood').value.trim();
-  const duration  = document.getElementById('rxDuration').value.trim();
-  const special   = document.getElementById('rxSpecial').value.trim();
-  const timing    = rxGetTiming();
-  const errEl     = document.getElementById('rxFormError');
-
-  // ── Validation ──
-  if (!name) {
-    errEl.textContent = '⚠️ Medicine name is required.';
-    document.getElementById('rxMedicineName').focus();
-    return;
-  }
-  if (!dosage) {
-    errEl.textContent = '⚠️ Dosage is required.';
-    document.getElementById('rxDosage').focus();
-    return;
-  }
-  if (!frequency) {
-    errEl.textContent = '⚠️ Please select a frequency.';
-    document.getElementById('rxFrequency').focus();
-    return;
-  }
-  if (frequency !== 'As needed' && timing.length === 0) {
-    errEl.textContent = '⚠️ Please select at least one timing.';
-    return;
-  }
-  if (!food) {
-    errEl.textContent = '⚠️ Please select a food instruction.';
-    document.getElementById('rxFood').focus();
-    return;
-  }
-  if (!duration) {
-    errEl.textContent = '⚠️ Duration is required.';
-    document.getElementById('rxDuration').focus();
-    return;
-  }
-  errEl.textContent = '';
-
-  const entry = { name, dosage, frequency, timing, food_instruction: food, duration, special_instructions: special };
-
-  if (rxEditingIndex >= 0) {
-    medicines[rxEditingIndex] = entry;
-  } else {
-    medicines.push(entry);
-  }
-
-  clearMedicineForm();
-  renderMedicineList();
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// MEDICINE FORM: edit an existing medicine (loads it back into the form)
-// ─────────────────────────────────────────────────────────────────────────────
-function editMedicine(index) {
-  const m = medicines[index];
-  if (!m) return;
-
-  document.getElementById('rxMedicineName').value = m.name;
-  document.getElementById('rxDosage').value       = m.dosage;
-  document.getElementById('rxFrequency').value    = m.frequency;
-  document.getElementById('rxFood').value         = m.food_instruction;
-  document.getElementById('rxDuration').value     = m.duration;
-  document.getElementById('rxSpecial').value      = m.special_instructions || '';
-
-  // Apply timing checkboxes
-  const isAsNeeded = m.frequency === 'As needed';
-  document.querySelectorAll('input[name="rxTiming"]').forEach(cb => {
-    cb.disabled = isAsNeeded;
-    cb.checked  = !isAsNeeded && m.timing.includes(cb.value);
-  });
-
-  // Update timing hint
-  const hint = document.getElementById('rxTimingHint');
-  const req  = document.getElementById('rxTimingRequired');
-  if (isAsNeeded) {
-    hint.textContent  = 'Timing not applicable for "As needed" frequency.';
-    req.style.display = 'none';
-  } else {
-    hint.textContent  = 'Select one or more timing options.';
-    req.style.display = '';
-  }
-
-  rxEditingIndex = index;
-  document.getElementById('rxAddBtn').textContent = '✔ Update Medicine';
-  document.getElementById('rxFormError').textContent = '';
-  // Scroll form into view
-  document.getElementById('rxEntryPanel').scrollIntoView({ behavior: 'smooth', block: 'start' });
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// MEDICINE FORM: remove a medicine from the list
-// ─────────────────────────────────────────────────────────────────────────────
-function removeMedicine(index) {
-  // If currently editing the item being removed, reset the form
-  if (rxEditingIndex === index) clearMedicineForm();
-  else if (rxEditingIndex > index) rxEditingIndex--;  // Adjust index after splice
-
-  medicines.splice(index, 1);
-  renderMedicineList();
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// PRESCRIPTION GENERATOR: send structured data to Flask
-// ─────────────────────────────────────────────────────────────────────────────
 async function generatePrescription() {
-  const patientName  = document.getElementById('patientName').value.trim();
-  const patientAge   = document.getElementById('patientAge').value.trim();
-  const patientGender = document.getElementById('patientGender').value.trim();
-  const patientPhone  = document.getElementById('patientPhone').value.trim();
-
-  // Patient field validation (unchanged)
-  if (!patientName) { showGeneratorError('Please enter patient name.'); return; }
-  if (!patientAge)  { showGeneratorError('Please enter patient age.');  return; }
-  if (isNaN(patientAge) || Number(patientAge) < 1 || Number(patientAge) > 150) {
-    showGeneratorError('Please enter a valid age (1–150).');
-    return;
-  }
-  if (!patientGender) { showGeneratorError('Please select patient gender.'); return; }
-  if (!/^[6-9]\d{9}$/.test(patientPhone)) {
-    showGeneratorError('Please enter a valid 10-digit mobile number.');
-    return;
-  }
-
-  // At least one medicine required
-  if (medicines.length === 0) {
-    showGeneratorError('Please add at least one medicine before generating the prescription.');
-    return;
-  }
-
-  generateBtn.disabled = true;
-  generateBtn.textContent = 'Generating…';
   generatorOutput.innerHTML = '';
-
   try {
-    const res = await fetch('/generate-prescription', {
+    if (!selectedPatient) throw new Error('Select a patient before saving a prescription.');
+    const prescription = prescriptionInput();
+    generateBtn.disabled = true;
+    generateBtn.textContent = 'Saving visit…';
+    const payload = {
+      patient_id: selectedPatient.patient_id,
+      ...prescription
+    };
+    const response = await fetch('/generate-prescription', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        patient_name:  patientName,
-        age:           patientAge,
-        gender:        patientGender,
-        phone_number:  patientPhone,
-        medicines:     medicines          // structured array – NO "text" field
-      })
+      body: JSON.stringify(payload)
     });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || `Failed to save prescription (HTTP ${response.status}).`);
 
-    const raw = await res.text();
-    let data;
-    try {
-      data = JSON.parse(raw);
-    } catch (parseErr) {
-      showGeneratorError(`Server returned invalid JSON:\n${raw}`);
-      console.error('Invalid JSON from /generate-prescription:', raw);
-      return;
-    }
-
-    if (!res.ok) {
-      showGeneratorError(data.error || `Failed to generate prescription. HTTP ${res.status}`);
-      return;
-    }
-    if (data.error) {
-      showGeneratorError(data.error);
-      return;
-    }
-
-    // Success
-    const driveBtnHtml = data.drive_url 
-      ? `<a href="${escapeHtml(data.drive_url)}" target="_blank" class="rx-download-link rx-drive-link" style="background:#4285F4; margin-left:10px;">
-          ☁️ View on Google Drive
-        </a>` 
+    const driveLink = data.drive_url
+      ? `<a href="${escapeHtml(data.drive_url)}" target="_blank" rel="noopener" class="rx-download-link rx-drive-link">View on Google Drive</a>`
       : '';
-
     generatorOutput.innerHTML = `
       <div class="medicine-card">
-        <h3>✅ Prescription Generated</h3>
-        <p><b>Patient:</b> ${escapeHtml(data.patient)}</p>
-        <p><b>Mobile:</b>  ${escapeHtml(data.phone_number)}</p>
-        <p><b>Age:</b>     ${escapeHtml(data.age)}</p>
-        <p><b>Gender:</b>  ${escapeHtml(data.gender)}</p>
-        <p><b>Medicines:</b> ${data.medicines ? data.medicines.length : medicines.length}</p>
-        <br>
+        <h3>Visit saved and prescription generated</h3>
+        <p><b>Patient:</b> ${escapeHtml(data.patient)} · ${escapeHtml(data.patient_id)}</p>
+        <p><b>Visit ID:</b> ${escapeHtml(data.visit_id)}</p>
+        <p><b>Doctor ID:</b> ${escapeHtml(data.doctor_id)}</p>
+        <p><b>Medicines:</b> ${data.medicines.length}</p>
         <div class="rx-download-buttons">
-          <a href="${escapeHtml(data.download_url || data.local_download_url)}" target="_blank" class="rx-download-link">
-            📄 Download Prescription PDF
-          </a>
-          ${driveBtnHtml}
+          <a href="${escapeHtml(data.download_url)}" target="_blank" rel="noopener" class="rx-download-link">Download prescription PDF</a>
+          ${driveLink}
         </div>
-      </div>
-    `;
-
-  } catch (err) {
-    showGeneratorError(err.message);
-  } finally {
-    generateBtn.disabled = false;
-    generateBtn.textContent = 'Generate Prescription PDF';
+      </div>`;
+    generateBtn.textContent = 'Visit saved';
+    generateBtn.disabled = true;
+    recordSpeechBtn.disabled = true;
+    await loadSelectedPatient(selectedPatient.patient_id, false);
+  } catch (error) {
+    showGeneratorError(error.message);
+    generateBtn.disabled = !document.getElementById('prescriptionText').value.trim();
+    generateBtn.textContent = 'Save visit and generate PDF';
   }
 }
 
-generateBtn.addEventListener('click', generatePrescription);
-const rxAddBtn = document.getElementById('rxAddBtn');
-if (rxAddBtn) rxAddBtn.addEventListener('click', addOrUpdateMedicine);
-recordSpeechBtn.addEventListener('click', toggleSpeechRecognition);
+if (generateBtn) generateBtn.addEventListener('click', generatePrescription);
+
+async function doctorJsonRequest(url, options = {}) {
+  const response = await fetch(url, options);
+  const data = await response.json();
+  if (!response.ok) {
+    const error = new Error(data.error || `Request failed (HTTP ${response.status}).`);
+    error.data = data;
+    throw error;
+  }
+  return data;
+}
+
+function renderPatientSearchResults(patients) {
+  const results = document.getElementById('patientSearchResults');
+  results.innerHTML = '';
+  if (!patients.length) {
+    results.innerHTML = '<p class="empty-state">No matching patient was found. Register a new patient below.</p>';
+    return;
+  }
+  patients.forEach(patient => {
+    const card = document.createElement('article');
+    card.className = 'patient-search-result';
+    const summary = document.createElement('p');
+    summary.textContent = `${patient.patient_name} · ${patient.patient_id} · ${patient.mobile_number}`;
+    const selectButton = document.createElement('button');
+    selectButton.type = 'button';
+    selectButton.className = 'secondary-button';
+    selectButton.textContent = 'Select patient and view history';
+    selectButton.addEventListener('click', () => loadSelectedPatient(patient.patient_id));
+    card.append(summary, selectButton);
+    results.appendChild(card);
+  });
+}
+
+async function searchDoctorPatients(searchBy, value) {
+  const status = document.getElementById('patientSearchStatus');
+  const registration = document.getElementById('newPatientRegistration');
+  selectedPatient = null;
+  selectedPatientVisits = [];
+  document.getElementById('selectedPatientPanel').hidden = true;
+  document.getElementById('prescriptionWorkflow').hidden = true;
+  status.textContent = 'Searching patient records…';
+  registration.hidden = true;
+  document.getElementById('patientSearchResults').innerHTML = '';
+  try {
+    const query = new URLSearchParams({ [searchBy]: value });
+    const data = await doctorJsonRequest(`/doctor/patients/search?${query}`);
+    renderPatientSearchResults(data.patients || []);
+    if (!data.patients || data.patients.length === 0) {
+      status.textContent = 'No match found. Register the patient if they are new.';
+      registration.hidden = false;
+      if (searchBy === 'mobile_number') {
+        document.getElementById('newPatientMobile').value = value;
+      }
+    } else {
+      status.textContent = `${data.patients.length} matching patient record(s). Select the correct patient.`;
+    }
+  } catch (error) {
+    status.textContent = error.message;
+  }
+}
+
+function renderPatientHistory(visits) {
+  const historyList = document.getElementById('patientHistoryList');
+  if (!visits.length) {
+    historyList.innerHTML = '<p class="empty-state">This patient has no previous prescriptions.</p>';
+    return;
+  }
+
+  historyList.innerHTML = visits.map(visit => {
+    const medicinesHtml = visit.medicines.length
+      ? `<ul class="visit-medicine-list">${visit.medicines.map(medicine => `
+          <li><strong>${escapeHtml(medicine.medicine_name)}</strong> — ${escapeHtml(medicine.dosage)}
+            <span>Frequency: ${escapeHtml(medicine.frequency || 'Not specified')}</span>
+            <span>Duration: ${escapeHtml(medicine.duration || 'Not specified')}</span>
+            <span>Instructions: ${escapeHtml(medicine.instructions || medicine.special_instructions || medicine.food_instruction || 'None')}</span>
+          </li>`).join('')}</ul>`
+      : '<p>No medicines were recorded for this visit.</p>';
+    return `<article class="visit-history-card">
+      <div class="visit-history-heading">
+        <div><h4>${escapeHtml(visit.visit_date)} · ${escapeHtml(visit.visit_id)}</h4><p>Doctor ID: ${escapeHtml(visit.doctor_id)}</p></div>
+        <a class="secondary-button" href="${escapeHtml(visit.pdf_url)}" target="_blank" rel="noopener">View prescription PDF</a>
+      </div>
+      ${visit.diagnosis ? `<p><strong>Diagnosis:</strong> ${escapeHtml(visit.diagnosis)}</p>` : ''}
+      ${visit.notes ? `<p><strong>Prescription text / notes:</strong> ${escapeHtml(visit.notes)}</p>` : ''}
+      ${medicinesHtml}
+    </article>`;
+  }).join('');
+}
+
+async function loadSelectedPatient(patientId, startNew = false) {
+  const status = document.getElementById('patientSearchStatus');
+  status.textContent = 'Loading patient history…';
+  try {
+    const data = await doctorJsonRequest(
+      `/doctor/patients/${encodeURIComponent(patientId)}/history`
+    );
+    selectedPatient = data.patient;
+    selectedPatientVisits = data.visits || [];
+    document.getElementById('selectedPatientName').textContent = selectedPatient.patient_name;
+    document.getElementById('selectedPatientId').textContent = selectedPatient.patient_id;
+    document.getElementById('selectedPatientMobile').textContent = selectedPatient.mobile_number;
+    document.getElementById('selectedPatientAge').textContent = `${selectedPatient.age} years`;
+    document.getElementById('selectedPatientGender').textContent = selectedPatient.gender;
+    document.getElementById('selectedPatientVisitCount').textContent = selectedPatientVisits.length;
+    document.getElementById('updatedPatientMobile').value = selectedPatient.mobile_number;
+    document.getElementById('selectedPatientPanel').hidden = false;
+    document.getElementById('newPatientRegistration').hidden = true;
+    const hasHistory = selectedPatientVisits.length > 0;
+    const historyPanel = document.getElementById('patientHistoryPanel');
+    const historyButton = document.getElementById('viewPatientHistoryBtn');
+    const newPrescriptionButton = document.getElementById('startPrescriptionBtn');
+    historyPanel.hidden = !hasHistory;
+    historyButton.hidden = !hasHistory;
+    historyButton.textContent = 'Hide previous prescriptions';
+    newPrescriptionButton.hidden = !hasHistory;
+    document.getElementById('patientSearchResults').innerHTML = '';
+    document.getElementById('patientSearchStatus').textContent = '';
+    renderPatientHistory(selectedPatientVisits);
+    if (startNew || !hasHistory) beginNewPrescription();
+  } catch (error) {
+    status.textContent = error.message;
+  }
+}
+
+function beginNewPrescription() {
+  if (!selectedPatient) return;
+  prescriptionTextField.value = '';
+  prescriptionTextField.dispatchEvent(new Event('input'));
+  speechStatus.textContent = '';
+  document.getElementById('prescriptionPatientSummary').textContent =
+    `${selectedPatient.patient_name} · ${selectedPatient.patient_id} · ${selectedPatient.mobile_number}`;
+  document.getElementById('prescriptionWorkflow').hidden = false;
+  document.getElementById('generatorOutput').innerHTML = '';
+  generateBtn.textContent = 'Save visit and generate PDF';
+  generateBtn.disabled = true;
+  recordSpeechBtn.disabled = false;
+  document.getElementById('prescriptionWorkflow').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+const patientIdSearchForm = document.getElementById('patientIdSearchForm');
+if (patientIdSearchForm) {
+  patientIdSearchForm.addEventListener('submit', event => {
+    event.preventDefault();
+    const value = document.getElementById('patientIdSearch').value.trim();
+    if (!value) {
+      document.getElementById('patientSearchStatus').textContent = 'Enter a Patient ID.';
+      return;
+    }
+    searchDoctorPatients('patient_id', value);
+  });
+}
+
+const patientMobileSearchForm = document.getElementById('patientMobileSearchForm');
+if (patientMobileSearchForm) {
+  patientMobileSearchForm.addEventListener('submit', event => {
+    event.preventDefault();
+    const value = document.getElementById('patientMobileSearch').value.trim();
+    if (!value) {
+      document.getElementById('patientSearchStatus').textContent = 'Enter a mobile number.';
+      return;
+    }
+    searchDoctorPatients('mobile_number', value);
+  });
+}
+
+const registerPatientForm = document.getElementById('registerPatientForm');
+if (registerPatientForm) {
+  registerPatientForm.addEventListener('submit', async event => {
+    event.preventDefault();
+    const status = document.getElementById('registerPatientStatus');
+    status.textContent = 'Registering patient…';
+    const payload = Object.fromEntries(new FormData(registerPatientForm).entries());
+    try {
+      const data = await doctorJsonRequest('/doctor/patients', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      status.textContent = 'Patient registered.';
+      await loadSelectedPatient(data.patient.patient_id, true);
+    } catch (error) {
+      status.textContent = error.message;
+      if (error.data && error.data.existing_patients) {
+        renderPatientSearchResults(error.data.existing_patients);
+      }
+    }
+  });
+}
+
+const updatePatientMobileBtn = document.getElementById('updatePatientMobileBtn');
+if (updatePatientMobileBtn) {
+  updatePatientMobileBtn.addEventListener('click', async () => {
+    if (!selectedPatient) return;
+    const status = document.getElementById('updatePatientMobileStatus');
+    status.textContent = 'Updating…';
+    try {
+      const data = await doctorJsonRequest(
+        `/doctor/patients/${encodeURIComponent(selectedPatient.patient_id)}`,
+        {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            mobile_number: document.getElementById('updatedPatientMobile').value.trim()
+          })
+        }
+      );
+      selectedPatient = data.patient;
+      document.getElementById('selectedPatientMobile').textContent = selectedPatient.mobile_number;
+      document.getElementById('updatedPatientMobile').value = selectedPatient.mobile_number;
+      document.getElementById('prescriptionPatientSummary').textContent =
+        `${selectedPatient.patient_name} · ${selectedPatient.patient_id} · ${selectedPatient.mobile_number}`;
+      status.textContent = 'Mobile number updated. Patient history remains linked by Patient ID.';
+    } catch (error) {
+      status.textContent = error.message;
+    }
+  });
+}
+
+const viewPatientHistoryBtn = document.getElementById('viewPatientHistoryBtn');
+if (viewPatientHistoryBtn) {
+  viewPatientHistoryBtn.addEventListener('click', () => {
+    const panel = document.getElementById('patientHistoryPanel');
+    panel.hidden = !panel.hidden;
+    viewPatientHistoryBtn.textContent = panel.hidden
+      ? 'View previous prescriptions'
+      : 'Hide previous prescriptions';
+  });
+}
+
+const startPrescriptionBtn = document.getElementById('startPrescriptionBtn');
+if (startPrescriptionBtn) startPrescriptionBtn.addEventListener('click', beginNewPrescription);
+const closePrescriptionBtn = document.getElementById('closePrescriptionBtn');
+if (closePrescriptionBtn) closePrescriptionBtn.addEventListener('click', () => {
+  document.getElementById('prescriptionWorkflow').hidden = true;
+});
+const clearSelectedPatientBtn = document.getElementById('clearSelectedPatientBtn');
+if (clearSelectedPatientBtn) clearSelectedPatientBtn.addEventListener('click', () => {
+  selectedPatient = null;
+  selectedPatientVisits = [];
+  document.getElementById('selectedPatientPanel').hidden = true;
+  document.getElementById('prescriptionWorkflow').hidden = true;
+});
+
+if (recordSpeechBtn) recordSpeechBtn.addEventListener('click', toggleSpeechRecognition);
 
 function showError(message) {
   output.innerHTML = `<div class="error" style="background: #fee; color: #c33; padding: 15px; border-radius: 8px; margin: 10px 0;">
@@ -451,12 +456,16 @@ function initializeSpeechRecognition() {
       .join(' ');
 
     if (transcript) {
-      // Append dictated text to the medicine name field (replaces old textarea target)
-      const nameField = document.getElementById('rxMedicineName');
-      if (nameField) {
-        nameField.value = (nameField.value ? nameField.value + ' ' : '') + transcript.trim();
+      // Append speech recognition output to the prescription transcript.
+      const prescriptionField = document.getElementById('prescriptionText');
+
+      if (prescriptionField) {
+          prescriptionField.value +=
+              (prescriptionField.value ? '\n' : '') + transcript.trim();
+          prescriptionField.dispatchEvent(new Event('input'));
       }
-      speechStatus.textContent = '✅ Medicine name captured. Click "Stop" to finish.';
+
+      speechStatus.textContent = '✅ Speech captured successfully.';
     }
   };
 
@@ -466,7 +475,7 @@ function initializeSpeechRecognition() {
 
   recognition.onend = () => {
     recognizing = false;
-    recordSpeechBtn.textContent = '🎙️ Dictate Name';
+    recordSpeechBtn.textContent = 'Record Prescription';
     if (!speechStatus.textContent.includes('captured')) {
       speechStatus.textContent = '🛑 Recording stopped. Press the button again to try again.';
     }
@@ -502,8 +511,18 @@ function renderResults(results) {
     uses: lang === 'kn' ? 'ಉಪಯೋಗಗಳು (Uses)' : '💊 Uses',
     sideEffects: lang === 'kn' ? 'ಅಡ್ಡ ಪರಿಣಾಮಗಳು (Side Effects)' : '⚠️ Side Effects',
     expiry: lang === 'kn' ? 'ಮುಕ್ತಾಯ ದಿನಾಂಕ' : '📅 Expiry Date',
-    alternates: lang === 'kn' ? 'ಪರ್ಯಾಯ ಔಷಧಗಳು' : '🔄 Alternative Medicines',
-    source: lang === 'kn' ? 'ಮಾಹಿತಿ ಮೂಲ' : '📊 Data Source'
+    sameIngredient: lang === 'kn' ? 'ಒಂದೇ ಸಕ್ರಿಯ ಘಟಕಾಂಶದ ಬ್ರ್ಯಾಂಡ್ ಸಲಹೆಗಳು' : '🔄 Same-Ingredient Brand Suggestions',
+    otherDrugs: lang === 'kn' ? 'ವೈದ್ಯರು ಪರಿಗಣಿಸಬಹುದಾದ ಇತರ ಔಷಧಿಗಳು' : '💊 Other Drugs a Doctor May Consider',
+    source: lang === 'kn' ? 'ಮಾಹಿತಿ ಮೂಲ' : '📊 Data Source',
+    brand: lang === 'kn' ? 'ಬ್ರ್ಯಾಂಡ್' : 'Brand',
+    generic: lang === 'kn' ? 'ಜನರಿಕ್ ಹೆಸರು' : 'Generic name',
+    strength: lang === 'kn' ? 'ಶಕ್ತಿ' : 'Strength',
+    dosageForm: lang === 'kn' ? 'ಔಷಧ ರೂಪ' : 'Dosage form',
+    reason: lang === 'kn' ? 'ಕಾರಣ' : 'Reason',
+    noSuggestions: lang === 'kn' ? 'ವಿಶ್ವಾಸಾರ್ಹ ಸಲಹೆಗಳು ಲಭ್ಯವಿಲ್ಲ.' : 'No reliable suggestions available.',
+    suggestionsDisclaimer: lang === 'kn'
+      ? 'AI ಮೂಲಕ ರಚಿಸಲಾದ ಔಷಧ ಸಲಹೆಗಳು ಪರಿಶೀಲಿತ ಬದಲಿಗಳು ಅಲ್ಲ. ಯಾವುದೇ ಔಷಧವನ್ನು ಬದಲಿಸುವ ಅಥವಾ ಬದಲಾಗಿ ಬಳಸುವ ಮೊದಲು ಅರ್ಹ ವೈದ್ಯರು ಅಥವಾ ಔಷಧ ತಜ್ಞರನ್ನು ಸಂಪರ್ಕಿಸಿ.'
+      : 'AI-generated medicine suggestions are not verified substitutes. Always consult a qualified doctor or pharmacist before changing or replacing any medicine.'
   };
 
   let html = '';
@@ -530,7 +549,7 @@ function renderResults(results) {
       r.dosage_form || 'Information not available';
 
     const expiryDate =
-      r.expiry_date || r.expiry || 'NOT FOUND';
+      formatExpiryDisplay(r.expiry_date || r.expiry || 'NOT FOUND');
 
     const source =
       r.source || 'Gemini';
@@ -547,14 +566,6 @@ function renderResults(results) {
 
     if (typeof sideEffects === 'string') {
       sideEffects = [sideEffects];
-    }
-
-    // Get alternatives
-    let alternatives =
-      r.alternatives || r.alternates || [];
-
-    if (typeof alternatives === 'string') {
-      alternatives = [alternatives];
     }
 
     html += `
@@ -599,7 +610,13 @@ function renderResults(results) {
 
         ${formatSection(labels.sideEffects, sideEffects, 'side-effects')}
 
-        ${formatSection(labels.alternates, alternatives, 'alternatives')}
+        ${formatSection(labels.sameIngredient, r.same_ingredient_alternatives, 'same-ingredient-alternatives', labels.noSuggestions, labels)}
+
+        ${formatSection(labels.otherDrugs, r.other_drug_options, 'other-drug-options', labels.noSuggestions, labels)}
+
+        <p class="suggestions-disclaimer" style="margin-top: 16px; padding: 12px; border-left: 4px solid #d6a94f; background: #fff8e6; color: #5f5133; border-radius: 6px;">
+          ${escapeHtml(labels.suggestionsDisclaimer)}
+        </p>
 
         ${(uses.length === 0 ||
           (uses.length === 1 &&
@@ -618,7 +635,61 @@ function renderResults(results) {
   output.innerHTML = html;
 }
 
-function formatSection(title, items, sectionClass) {
+function formatSection(title, items, sectionClass, emptyMessage, labels) {
+  if (sectionClass === 'same-ingredient-alternatives' || sectionClass === 'other-drug-options') {
+    const suggestions = Array.isArray(items) ? items : [];
+    const seen = new Set();
+    const availableText = (value) => {
+      if (typeof value !== 'string' || !value.trim()) return '';
+      const text = value.trim();
+      return ['information not available', 'not available', 'unknown', 'n/a', 'na']
+        .includes(text.toLowerCase()) ? '' : text;
+    };
+
+    const suggestionItems = suggestions.map((item) => {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) return '';
+
+      if (sectionClass === 'same-ingredient-alternatives') {
+        const brand = availableText(item.brand_name);
+        const brandKey = brand.toLowerCase().replace(/[^a-z0-9]/g, '');
+        if (!brand || !brandKey || seen.has(brandKey)) return '';
+        seen.add(brandKey);
+
+        const details = [
+          [labels.generic, availableText(item.generic_name)],
+          [labels.strength, availableText(item.strength)],
+          [labels.dosageForm, availableText(item.dosage_form)]
+        ].filter(([, value]) => value);
+
+        return `<li style="margin-bottom: 10px; line-height: 1.5;">
+          <strong>${escapeHtml(labels.brand)}: ${escapeHtml(brand)}</strong>
+          ${details.map(([label, value]) => `<div>${escapeHtml(label)}: ${escapeHtml(value)}</div>`).join('')}
+        </li>`;
+      }
+
+      const medicineName = availableText(item.medicine_name);
+      const medicineKey = medicineName.toLowerCase().replace(/[^a-z0-9]/g, '');
+      if (!medicineName || !medicineKey || seen.has(medicineKey)) return '';
+      seen.add(medicineKey);
+      const reason = availableText(item.reason);
+      return `<li style="margin-bottom: 10px; line-height: 1.5;">
+        <strong>${escapeHtml(medicineName)}</strong>
+        ${reason ? `<div>${escapeHtml(labels.reason)}: ${escapeHtml(reason)}</div>` : ''}
+      </li>`;
+    }).filter(Boolean).slice(0, 5);
+
+    return `
+      <div class="section ${sectionClass}" style="margin-top: 20px;">
+        <div class="section-title" style="font-weight: bold; font-size: 18px; margin-bottom: 10px; color: #2c3e50;">${escapeHtml(title)}</div>
+        <div class="full-text" style="background: #f9f9f9; padding: 12px; border-radius: 8px;">
+          ${suggestionItems.length
+            ? `<ul style="margin: 0; padding-left: 20px;">${suggestionItems.join('')}</ul>`
+            : `<p style="margin: 0;">${escapeHtml(emptyMessage)}</p>`}
+        </div>
+      </div>
+    `;
+  }
+
   if (!items || items.length === 0) {
     return '';
   }
@@ -659,9 +730,9 @@ function formatSection(title, items, sectionClass) {
     
     // Skip if too short or too long
      // Allow shorter but meaningful items (min length 5) so we can show up to 5 uses/side-effects
-     if (sectionClass !== 'alternatives' && (text.length < 5 || text.length > 300)) {
-    return;
-}
+    if ((sectionClass === 'uses' || sectionClass === 'side-effects') && (text.length < 5 || text.length > 300)) {
+      return;
+    }
     
     // Skip if it's just a number
     if (/^\d+$/.test(text)) {
@@ -784,6 +855,9 @@ function showPageSection(sectionId) {
   return true;
 }
 
+const initialSection = document.documentElement.dataset.initialSection;
+if (initialSection) showPageSection(initialSection);
+
 if (document.documentElement.dataset.navigationInitialized !== 'true') {
   document.documentElement.dataset.navigationInitialized = 'true';
   document.addEventListener('click', event => {
@@ -819,25 +893,110 @@ const inventoryRefreshBtn = document.getElementById('inventoryRefreshBtn');
 const expiringList = document.getElementById('expiringList');
 const expiredList = document.getElementById('expiredList');
 const staffLowStockList = document.getElementById('staffLowStockList');
+const expiryVerificationNotice = document.getElementById('expiryVerificationNotice');
+let pendingOcrExpiry = null;
+
+function expiryDaysInMonth(year, month) {
+  if (month === 2) {
+    return year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0) ? 29 : 28;
+  }
+  return [4, 6, 9, 11].includes(month) ? 30 : 31;
+}
+
+function expiryUtcTimestamp(year, month, day) {
+  const timestamp = new Date(0);
+  timestamp.setUTCFullYear(year, month - 1, day);
+  return timestamp.getTime();
+}
 
 function formatExpiryForInput(value) {
   if (!value || value === 'NOT FOUND' || value === 'Information not available') return '';
-  const normalized = String(value).trim().replace(/[./]/g, '-');
-  if (/^\d{4}-\d{1,2}$/.test(normalized)) return `${normalized}-01`;
-  if (/^\d{1,2}-\d{4}$/.test(normalized)) {
-    const [month, year] = normalized.split('-');
-    return `${year}-${month.padStart(2, '0')}-01`;
+  const text = String(value).trim();
+  const monthNames = {
+    jan: 1, january: 1, feb: 2, february: 2, mar: 3, march: 3,
+    apr: 4, april: 4, may: 5, jun: 6, june: 6, jul: 7, july: 7,
+    aug: 8, august: 8, sep: 9, sept: 9, september: 9, oct: 10,
+    october: 10, nov: 11, november: 11, dec: 12, december: 12
+  };
+  const makeIso = (year, month, day) => {
+    if (year < 1 || year > 9999 || month < 1 || month > 12 ||
+        day < 1 || day > expiryDaysInMonth(year, month)) return '';
+    return `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+  };
+  const monthEnd = (year, month) => makeIso(year, month, expiryDaysInMonth(year, month));
+
+  let match = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (match) return makeIso(Number(match[1]), Number(match[2]), Number(match[3]));
+
+  match = text.match(/^(\d{4})-(\d{1,2})$/);
+  if (match) return monthEnd(Number(match[1]), Number(match[2]));
+
+  match = text.match(/^(\d{1,2})\/(\d{4})$/);
+  if (match) return monthEnd(Number(match[2]), Number(match[1]));
+
+  match = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (match) return makeIso(Number(match[3]), Number(match[2]), Number(match[1]));
+
+  match = text.match(/^([A-Za-z]{3,9})\.?[\s-]+(\d{4})$/);
+  if (match) {
+    const month = monthNames[match[1].toLowerCase()];
+    return month ? monthEnd(Number(match[2]), month) : '';
   }
-  if (/^\d{4}-\d{1,2}-\d{1,2}$/.test(normalized)) {
-    return normalized.split('-').map((part, index) => index === 1 || index === 2 ? part.padStart(2, '0') : part).join('-');
-  }
-  return normalized;
+  return '';
+}
+
+function formatExpiryDisplay(value) {
+  const isoDate = formatExpiryForInput(value);
+  if (!isoDate) return String(value || '');
+  const [year, month, day] = isoDate.split('-').map(Number);
+  const lastDay = expiryDaysInMonth(year, month);
+  if (day === lastDay) return `${String(month).padStart(2, '0')}/${year}`;
+  return `${String(day).padStart(2, '0')}/${String(month).padStart(2, '0')}/${year}`;
+}
+
+function expiryPresentation(value) {
+  const isoDate = formatExpiryForInput(value);
+  const display = formatExpiryDisplay(value);
+  if (!isoDate) return { display, status: null, label: '' };
+
+  const [year, month, day] = isoDate.split('-').map(Number);
+  const todayParts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Kolkata',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).formatToParts(new Date()).reduce((parts, item) => {
+    if (item.type !== 'literal') parts[item.type] = Number(item.value);
+    return parts;
+  }, {});
+  const remainingDays = (expiryUtcTimestamp(year, month, day) -
+    expiryUtcTimestamp(todayParts.year, todayParts.month, todayParts.day)) / 86400000;
+  const status = remainingDays < 0 ? 'expired' : remainingDays <= 30 ? 'expiring' : 'valid';
+  const labels = {
+    en: { expired: 'Expired', expiring: 'Expiring Soon', valid: 'Valid' },
+    kn: { expired: 'ಅವಧಿ ಮುಗಿದಿದೆ', expiring: 'ಶೀಘ್ರದಲ್ಲೇ ಅವಧಿ ಮುಗಿಯುತ್ತದೆ', valid: 'ಮಾನ್ಯವಾಗಿದೆ' }
+  };
+  const language = langToggle.value === 'kn' ? 'kn' : 'en';
+  return { display, status, label: labels[language][status] };
 }
 
 function firstScanResult(data) {
   if (!Array.isArray(data) || !data.length) throw new Error('No medicine details were detected.');
   if (data[0].error && !data[0].medicine_name && !data[0].brand_name) throw new Error(data[0].error);
   return data[0];
+}
+
+function updateExpiryVerificationNotice() {
+  if (!expiryVerificationNotice) return;
+  expiryVerificationNotice.hidden = !pendingOcrExpiry;
+  if (!pendingOcrExpiry) {
+    expiryVerificationNotice.textContent = '';
+    return;
+  }
+  const displayDate = formatExpiryDisplay(pendingOcrExpiry);
+  expiryVerificationNotice.textContent = langToggle.value === 'kn'
+    ? `OCR ಗುರುತಿಸಿದ ಮುಕ್ತಾಯ ದಿನಾಂಕ: ${displayDate}. ಉಳಿಸುವ ಮೊದಲು ಪ್ಯಾಕೇಜ್‌ನೊಂದಿಗೆ ಪರಿಶೀಲಿಸಿ.`
+    : `OCR expiry detected: ${displayDate}. Verify this date against the package before saving.`;
 }
 
 async function scanStaffImage(file) {
@@ -858,6 +1017,11 @@ function fillStaffMedicineForm(result) {
   document.getElementById('strengthInput').value = result.strength || '';
   document.getElementById('dosageFormInput').value = result.dosage_form || '';
   document.getElementById('expiryDateInput').value = formatExpiryForInput(result.expiry_date);
+  pendingOcrExpiry = result.expiry_date &&
+    !['NOT FOUND', 'Information not available'].includes(result.expiry_date)
+    ? result.expiry_date
+    : null;
+  updateExpiryVerificationNotice();
 }
 
 function setStaffFieldsEditable(editable) {
@@ -927,6 +1091,15 @@ async function searchLocationByName() {
 }
 async function saveStaffMedicine(event) {
   event.preventDefault();
+  if (pendingOcrExpiry) {
+    const expiryValue = formatExpiryDisplay(document.getElementById('expiryDateInput').value);
+    const message = langToggle.value === 'kn'
+      ? `OCR ಗುರುತಿಸಿದ ಮುಕ್ತಾಯ ದಿನಾಂಕ ${expiryValue}. ಉಳಿಸುವ ಮೊದಲು ಪ್ಯಾಕೇಜ್‌ನೊಂದಿಗೆ ಪರಿಶೀಲಿಸಿ. ಮುಂದುವರಿಸಬೇಕೆ?`
+      : `OCR extracted expiry date ${expiryValue}. Verify it against the package before saving. Continue?`;
+    if (!window.confirm(message)) return;
+    pendingOcrExpiry = null;
+    expiryVerificationNotice.hidden = true;
+  }
   const formData = new FormData(addMedicineForm);
   const payload = Object.fromEntries(formData.entries());
   try {
@@ -943,7 +1116,10 @@ async function saveStaffMedicine(event) {
 }
 
 function renderInventory(medicines) {
-  inventoryTableBody.innerHTML = medicines.length ? medicines.map((medicine, index) => `<tr><td>${index + 1}</td><td>${escapeHtml(medicine.medicine_name)}</td><td>${escapeHtml(medicine.strength || '')}</td><td>${escapeHtml(medicine.expiry_date)}</td><td>${escapeHtml(medicine.row_number ?? '')}</td><td>${escapeHtml(medicine.column_number ?? '')}</td></tr>`).join('') : '<tr><td colspan="6" class="table-empty">No medicines in stock.</td></tr>';
+  inventoryTableBody.innerHTML = medicines.length ? medicines.map((medicine, index) => {
+    const expiry = expiryPresentation(medicine.expiry_date);
+    return `<tr><td>${index + 1}</td><td>${escapeHtml(medicine.medicine_name)}</td><td>${escapeHtml(medicine.strength || '')}</td><td><span>${escapeHtml(expiry.display)}</span>${expiry.status ? `<span class="expiry-status expiry-status-${expiry.status}">${escapeHtml(expiry.label)}</span>` : ''}</td><td>${escapeHtml(medicine.row_number ?? '')}</td><td>${escapeHtml(medicine.column_number ?? '')}</td></tr>`;
+  }).join('') : '<tr><td colspan="6" class="table-empty">No medicines in stock.</td></tr>';
 }
 
 async function loadInventory() {
@@ -952,8 +1128,14 @@ async function loadInventory() {
   renderInventory(data.medicines || []);
 }
 
-function renderAlertList(element, medicines, emptyText) {
-  element.innerHTML = medicines.length ? medicines.map(medicine => `<div>${escapeHtml(medicine.medicine_name)} <small>(${escapeHtml(medicine.expiry_date)} | Qty: ${escapeHtml(medicine.quantity)})</small></div>`).join('') : `<div class="empty-state">${emptyText}</div>`;
+function renderAlertList(element, medicines, emptyText, withExpiryStatus = false) {
+  element.innerHTML = medicines.length ? medicines.map(medicine => {
+    const expiry = expiryPresentation(medicine.expiry_date);
+    const status = withExpiryStatus && expiry.status
+      ? `<span class="expiry-status expiry-status-${expiry.status}">${escapeHtml(expiry.label)}</span>`
+      : '';
+    return `<div>${escapeHtml(medicine.medicine_name)} ${status}<small>(${escapeHtml(expiry.display)} | Qty: ${escapeHtml(medicine.quantity)})</small></div>`;
+  }).join('') : `<div class="empty-state">${emptyText}</div>`;
 }
 
 async function loadStaffAlerts() {
@@ -962,18 +1144,21 @@ async function loadStaffAlerts() {
     fetch('/medicines/expired').then(response => response.json()),
     fetch('/medicines/low-stock').then(response => response.json())
   ]);
-  renderAlertList(expiringList, expiring.medicines || [], 'No medicines nearing expiry.');
-  renderAlertList(expiredList, expired.medicines || [], 'No expired medicines.');
+  renderAlertList(expiringList, expiring.medicines || [], 'No medicines nearing expiry.', true);
+  renderAlertList(expiredList, expired.medicines || [], 'No expired medicines.', true);
   renderAlertList(staffLowStockList, lowStock.medicines || [], 'No low-stock medicines.');
+  document.getElementById('expiringCount').textContent = expiring.count ?? (expiring.medicines || []).length;
+  document.getElementById('expiredCount').textContent = expired.count ?? (expired.medicines || []).length;
 }
 
-staffUpdateScanBtn.addEventListener('click', scanForStaffUpdate);
-staffLocationScanBtn.addEventListener('click', scanForLocation);
-staffLocationSearchBtn.addEventListener('click', searchLocationByName);
-staffLocationSearchInput.addEventListener('keydown', e => { if (e.key === 'Enter') searchLocationByName(); });
-addMedicineForm.addEventListener('submit', saveStaffMedicine);
-editExtractedFieldsBtn.addEventListener('click', () => {
+if (staffUpdateScanBtn) staffUpdateScanBtn.addEventListener('click', scanForStaffUpdate);
+if (langToggle) langToggle.addEventListener('change', updateExpiryVerificationNotice);
+if (staffLocationScanBtn) staffLocationScanBtn.addEventListener('click', scanForLocation);
+if (staffLocationSearchBtn) staffLocationSearchBtn.addEventListener('click', searchLocationByName);
+if (staffLocationSearchInput) staffLocationSearchInput.addEventListener('keydown', e => { if (e.key === 'Enter') searchLocationByName(); });
+if (addMedicineForm) addMedicineForm.addEventListener('submit', saveStaffMedicine);
+if (editExtractedFieldsBtn) editExtractedFieldsBtn.addEventListener('click', () => {
   setStaffFieldsEditable(true);
   staffUpdateStatus.textContent = 'Edit the extracted details, then save the medicine.';
 });
-inventoryRefreshBtn.addEventListener('click', loadInventory);
+if (inventoryRefreshBtn) inventoryRefreshBtn.addEventListener('click', loadInventory);

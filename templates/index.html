@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-user-role="{{ user_role }}" data-initial-section="{{ initial_section }}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -18,6 +18,12 @@
         </div>
       </div>
       <div class="header-actions">
+        {% if user_role != 'public' %}
+        <span class="signed-in-user">{{ user_id }} · {{ 'Doctor' if user_role == 'doctor' else 'Medical Staff' }}</span>
+        <form action="{{ url_for('logout') }}" method="post">
+          <button class="header-login-link" type="submit">Log out</button>
+        </form>
+        {% endif %}
       </div>
     </header>
 
@@ -25,11 +31,18 @@
       <aside class="sidebar" aria-label="Primary navigation">
         <div class="sidebar-heading">Workspace</div>
         <nav class="main-nav">
-          <button class="nav-item active" type="button" data-section="dashboardSection">Dashboard</button>
+          {% if user_role == 'public' %}
+          <button class="nav-item" type="button" data-section="scanSection">Scan Medicine</button>
+          {% elif user_role == 'doctor' %}
+          <button class="nav-item" type="button" data-section="generatorTab">Doctor Dashboard</button>
+          <button class="nav-item" type="button" data-section="scanSection">Scan Medicine</button>
+          {% else %}
+          <button class="nav-item" type="button" data-section="inventorySection">Medical Staff Dashboard</button>
           <button class="nav-item" type="button" data-section="scanSection">Scan Medicine</button>
           <button class="nav-item" type="button" data-section="inventorySection">Inventory</button>
           <button class="nav-item" type="button" data-section="addMedicineSection">Add Medicine</button>
           <button class="nav-item" type="button" data-section="alertsSection">Expiry Alerts</button>
+          {% endif %}
         </nav>
         <div class="sidebar-footer">
           <span class="status-dot" aria-hidden="true"></span>
@@ -39,13 +52,21 @@
 
       <main class="main-content">
         <button id="tabGenerator" class="legacy-tab-control" type="button" hidden>Prescription Generator</button>
-        <section id="dashboardSection" class="page-section active-section home-section" aria-labelledby="dashboardTitle">
-          <p class="home-description">Select you role</p>
+        <section id="dashboardSection" class="page-section home-section{% if initial_section == 'dashboardSection' %} active-section{% endif %}" aria-labelledby="dashboardTitle">
+          {% if user_role == 'public' %}
+          <p class="home-description">Choose a workspace or continue as a patient.</p>
           <div class="role-buttons">
             <button class="role-button" type="button" data-section-target="scanSection">Patient</button>
-            <button class="role-button" type="button" data-section-target="generatorTab">Doctor</button>
-            <button class="role-button" type="button" data-section-target="inventorySection">Medical Staff</button>
+            <a class="role-button" href="{{ url_for('doctor_login') }}">Doctor</a>
+            <a class="role-button" href="{{ url_for('staff_login') }}">Medical Staff</a>
           </div>
+          {% elif user_role == 'doctor' %}
+          <p class="home-description">Welcome to the Doctor Dashboard.</p>
+          <div class="role-buttons"><button class="role-button" type="button" data-section-target="generatorTab">Create a prescription</button></div>
+          {% else %}
+          <p class="home-description">Welcome to the Medical Staff Dashboard.</p>
+          <div class="role-buttons"><button class="role-button" type="button" data-section-target="inventorySection">Manage inventory</button></div>
+          {% endif %}
         </section>
 
         <section id="scanSection" class="page-section" aria-labelledby="scanTitle">
@@ -123,13 +144,16 @@
             <div class="result-lists">
               <div><h3>Uses</h3><ul class="result-uses"><li>Information not available</li></ul></div>
               <div><h3>Side Effects</h3><ul class="result-side-effects"><li>Information not available</li></ul></div>
-              <div><h3>Alternative Medicines</h3><ul class="result-alternatives"><li>Information not available</li></ul></div>
+              <div class="result-same-ingredient-alternatives"><h3>Same-Ingredient Brand Suggestions</h3></div>
+              <div class="result-other-drug-options"><h3>Other Medicines a Doctor May Consider (Not Interchangeable)</h3></div>
             </div>
+            <p class="suggestions-disclaimer">AI-generated medicine suggestions are not verified substitutes. Always consult a qualified doctor or pharmacist before changing or replacing any medicine.</p>
           </article>
           </div>
         </section>
 
-        <section id="inventorySection" class="page-section" aria-labelledby="inventoryTitle">
+        {% if user_role == 'medical_staff' %}
+        <section id="inventorySection" class="page-section{% if initial_section == 'inventorySection' %} active-section{% endif %}" aria-labelledby="inventoryTitle">
           <div class="staff-tabs"><button class="staff-tab active" type="button" data-section-target="inventorySection">Update Medicine</button><button class="staff-tab" type="button" data-section-target="addMedicineSection">Search Location</button><button class="staff-tab" type="button" data-section-target="alertsSection">Expiry Monitor</button></div>
           <button class="back-button" type="button" data-section-target="dashboardSection">Back to home</button>
           <h2 id="inventoryTitle">Update Medicine</h2>
@@ -154,6 +178,7 @@
                 <label>Column Number<input id="columnNumberInput" name="column_number" type="number" min="0"></label>
               </div>
               <p class="staff-help">Review the extracted details, then enter only quantity, row and column.</p>
+              <p id="expiryVerificationNotice" class="expiry-verification-notice" role="status" aria-live="polite" hidden></p>
               <button id="editExtractedFieldsBtn" class="secondary-button" type="button">Edit Details</button>
               <button id="addMedicineSubmitBtn" class="primary-button" type="submit">Save medicine</button>
             </form>
@@ -198,24 +223,86 @@
           </div>
           <article class="content-card low-stock-monitor"><h2>Low-stock medicines</h2><div id="staffLowStockList" class="alert-list">Loading...</div></article>
         </section>
+        {% endif %}
 
-        <section id="generatorTab" class="page-section prescription-section" aria-labelledby="prescriptionTitle">
+        {% if user_role == 'doctor' %}
+        <section id="generatorTab" class="page-section prescription-section{% if initial_section == 'generatorTab' %} active-section{% endif %}" aria-labelledby="prescriptionTitle">
           <button class="back-button" type="button" data-section-target="dashboardSection">Back to home</button>
-          <div class="section-heading"><div><p class="eyebrow">Patient care</p><h1 id="prescriptionTitle">Prescription generator</h1><p class="section-description">Create and share a digitally generated prescription.</p></div></div>
-          <article class="content-card generator-card">
-            <label for="patientName">Patient Name</label><input type="text" id="patientName" placeholder="Enter patient name">
-            <label for="patientAge">Age (years)</label><input type="number" id="patientAge" min="1" max="150" placeholder="Enter age">
-            <label for="patientGender">Gender</label><select id="patientGender"><option value="">Select gender</option><option value="Male">Male</option><option value="Female">Female</option><option value="Other">Other</option></select>
-            <label for="patientPhone">Mobile Number</label><input type="tel" id="patientPhone" maxlength="10" placeholder="Enter 10-digit mobile number">
-            <label for="prescriptionText">Prescription Text</label><textarea id="prescriptionText" placeholder="Example:
-Paracetamol 500 mg once daily for 1 week
-Dolo 650 twice daily for 3 weeks"></textarea>
-            <p class="hint">Enter patient details above. The prescription only needs medicines.</p>
-            <div class="generator-actions"><button id="recordSpeechBtn" type="button" class="record-btn">Record Prescription</button><button id="generateBtn" type="button" class="generate-btn">Generate Prescription PDF</button></div>
-            <p id="speechStatus" class="hint" aria-live="polite"></p>
-            <div id="generatorOutput" class="output" aria-live="polite"></div>
+          <div class="section-heading"><div><p class="eyebrow">Patient care</p><h1 id="prescriptionTitle">Patient management &amp; e-prescription</h1><p class="section-description">Find a patient, review their history, then create a new visit prescription.</p></div></div>
+
+          <article class="content-card doctor-workflow-card">
+            <h2>Search patient</h2>
+            <div class="patient-search-grid">
+              <form id="patientIdSearchForm" class="patient-search-form">
+                <label for="patientIdSearch">Patient ID</label>
+                <div class="patient-search-input"><input id="patientIdSearch" type="text" autocomplete="off" placeholder="e.g. PT-..."><button class="primary-button" type="submit">Search ID</button></div>
+              </form>
+              <form id="patientMobileSearchForm" class="patient-search-form">
+                <label for="patientMobileSearch">Mobile number</label>
+                <div class="patient-search-input"><input id="patientMobileSearch" type="tel" autocomplete="tel" placeholder="10-digit mobile number"><button class="primary-button" type="submit">Search mobile</button></div>
+              </form>
+            </div>
+            <p id="patientSearchStatus" class="hint" aria-live="polite"></p>
+            <div id="patientSearchResults" class="patient-search-results" aria-live="polite"></div>
           </article>
+
+          <article id="newPatientRegistration" class="content-card doctor-workflow-card" hidden>
+            <h2>Register new patient</h2>
+            <form id="registerPatientForm" class="patient-registration-form">
+              <label for="newPatientName">Patient name</label><input id="newPatientName" name="patient_name" type="text" required maxlength="120">
+              <label for="newPatientAge">Age (years)</label><input id="newPatientAge" name="age" type="number" required min="1" max="150">
+              <label for="newPatientGender">Gender</label><select id="newPatientGender" name="gender" required><option value="">Select gender</option><option>Female</option><option>Male</option><option>Other</option></select>
+              <label for="newPatientMobile">Mobile number</label><input id="newPatientMobile" name="mobile_number" type="tel" required maxlength="16" autocomplete="tel">
+              <label for="newPatientAddress">Address (optional)</label><textarea id="newPatientAddress" name="address" rows="2"></textarea>
+              <p id="registerPatientStatus" class="hint" aria-live="polite"></p>
+              <button class="primary-button" type="submit">Register and start prescription</button>
+            </form>
+          </article>
+
+          <article id="selectedPatientPanel" class="content-card doctor-workflow-card" hidden>
+            <div class="patient-card-heading"><div><p class="eyebrow">Selected patient</p><h2 id="selectedPatientName"></h2></div><button id="clearSelectedPatientBtn" class="secondary-button" type="button">Choose another patient</button></div>
+            <dl class="patient-details-grid">
+              <div><dt>Patient ID</dt><dd id="selectedPatientId"></dd></div>
+              <div><dt>Mobile number</dt><dd id="selectedPatientMobile"></dd></div>
+              <div><dt>Age</dt><dd id="selectedPatientAge"></dd></div>
+              <div><dt>Gender</dt><dd id="selectedPatientGender"></dd></div>
+              <div><dt>Previous visits</dt><dd id="selectedPatientVisitCount">0</dd></div>
+            </dl>
+            <div class="patient-mobile-update">
+              <label for="updatedPatientMobile">Update mobile number</label>
+              <input id="updatedPatientMobile" type="tel" maxlength="16" autocomplete="tel">
+              <button id="updatePatientMobileBtn" class="secondary-button" type="button">Save mobile number</button>
+              <span id="updatePatientMobileStatus" class="hint" aria-live="polite"></span>
+            </div>
+            <div class="patient-history-actions">
+              <button id="viewPatientHistoryBtn" class="secondary-button" type="button">View previous prescriptions</button>
+              <button id="startPrescriptionBtn" class="primary-button" type="button">Start a new visit prescription</button>
+            </div>
+            <section id="patientHistoryPanel" class="patient-history-panel" hidden aria-labelledby="patientHistoryTitle">
+              <h3 id="patientHistoryTitle">Previous prescription history</h3>
+              <div id="patientHistoryList"></div>
+            </section>
+          </article>
+
+          <section id="prescriptionWorkflow" class="content-card doctor-workflow-card" hidden aria-labelledby="newPrescriptionTitle">
+            <div class="patient-card-heading"><div><p class="eyebrow">New consultation</p><h2 id="newPrescriptionTitle">New prescription</h2></div><button id="closePrescriptionBtn" class="secondary-button" type="button">Close</button></div>
+            <p id="prescriptionPatientSummary" class="patient-summary"></p>
+
+            <section class="prescription-entry-panel" aria-labelledby="prescriptionEntryTitle">
+              <h3 id="prescriptionEntryTitle">Voice-to-text prescription</h3>
+              <p class="hint">Record the doctor's instructions, then review the recognized text before saving.</p>
+              <button id="recordSpeechBtn" type="button" class="record-btn">Record Prescription</button>
+              <p id="speechStatus" class="hint" aria-live="polite"></p>
+              <label for="prescriptionText">Recognized prescription text (review before saving)</label>
+              <textarea id="prescriptionText" readonly placeholder="Your recognized prescription will appear here."></textarea>
+            </section>
+            <div class="generator-actions">
+              <button id="generateBtn" type="button" class="generate-btn" disabled>Save visit and generate PDF</button>
+            </div>
+            <div id="generatorOutput" class="output" aria-live="polite"></div>
+          </section>
         </section>
+        {% endif %}
       </main>
     </div>
   </div>
@@ -229,4 +316,3 @@ Dolo 650 twice daily for 3 weeks"></textarea>
   <script src="/static/script.js"></script>
 </body>
 </html>
-

@@ -886,6 +886,24 @@ textarea:focus {
 .generate-btn { background: var(--green); border-color: var(--green); }
 .record-btn { border-color: var(--red); color: var(--red); }
 
+.generator-card .is-invalid {
+  border-color: var(--red);
+  box-shadow: 0 0 0 1px var(--red);
+}
+
+.field-error {
+  min-height: 0;
+  margin: 5px 0 0;
+  color: var(--red);
+  font-size: 11px;
+  line-height: 1.4;
+  text-transform: none;
+}
+
+.field-error:empty {
+  display: none;
+}
+
 .table-toolbar {
   display: flex;
   align-items: end;
@@ -904,6 +922,28 @@ td { color: var(--muted); }
 .alert-count { color: var(--red); font-family: Georgia, "Times New Roman", serif; font-size: 28px; }
 .alert-card-danger { border-top: 3px solid var(--red); }
 .alert-list { color: var(--muted); font-size: 11px; line-height: 1.7; }
+.expiry-status {
+  display: inline-block;
+  margin: 0 6px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.5;
+  vertical-align: middle;
+}
+.expiry-status-expired { color: #a61b1b; background: #fee4e2; }
+.expiry-status-expiring { color: #9a4d00; background: #fff0d6; }
+.expiry-status-valid { color: #176b3a; background: #e2f5e9; }
+.expiry-verification-notice {
+  margin: 12px 0;
+  padding: 10px 12px;
+  border-left: 3px solid #d99000;
+  background: #fff6df;
+  color: #704b00;
+  font-size: 12px;
+}
+.expiry-verification-notice[hidden] { display: none; }
 .empty-state { color: var(--muted); font-size: 11px; line-height: 1.7; }
 .modal-panel { border-radius: 0; }
 .toast { border-radius: 0; }
@@ -1084,6 +1124,227 @@ body:has(#generatorTab.active) #scanSection { display: none; }
 @media (max-width: 460px) {
   body { padding: 0; }
   .app-shell { min-height: 100vh; border-radius: 0; }
+}
+
+.doctor-workflow-card {
+  margin: 18px 0;
+  text-align: left;
+}
+
+.doctor-workflow-card h2,
+.doctor-workflow-card h3,
+.doctor-workflow-card h4 {
+  margin-top: 0;
+  color: var(--ink);
+}
+
+.patient-search-grid,
+.patient-registration-form,
+.patient-details-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.patient-search-form,
+.patient-registration-form {
+  display: grid;
+  gap: 8px;
+}
+
+.patient-search-form label,
+.patient-registration-form label,
+.doctor-workflow-card > label,
+.prescription-entry-panel > label,
+.patient-mobile-update label {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.patient-search-input {
+  display: flex;
+  gap: 8px;
+}
+
+.patient-search-input input,
+.patient-registration-form input,
+.patient-registration-form select,
+.patient-registration-form textarea,
+.doctor-workflow-card > input,
+.doctor-workflow-card > textarea,
+.prescription-entry-panel > textarea,
+.patient-mobile-update input {
+  width: 100%;
+  min-width: 0;
+  padding: 10px;
+}
+
+.patient-search-results {
+  display: grid;
+  gap: 10px;
+}
+
+.patient-search-result,
+.visit-history-card {
+  padding: 14px;
+  border: 1px solid var(--line);
+  background: #fff;
+}
+
+.patient-card-heading,
+.visit-history-heading,
+.patient-history-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.patient-details-grid {
+  margin: 18px 0;
+}
+
+.patient-details-grid > div {
+  padding: 10px;
+  border: 1px solid var(--line);
+}
+
+.patient-details-grid dt {
+  color: var(--muted);
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.patient-details-grid dd {
+  margin: 5px 0 0;
+  color: var(--ink);
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.patient-mobile-update {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 8px;
+  margin: 14px 0;
+}
+
+.patient-mobile-update label,
+.patient-mobile-update .hint {
+  grid-column: 1 / -1;
+}
+
+.patient-history-actions {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  margin-top: 18px;
+}
+
+.patient-history-panel {
+  margin-top: 22px;
+}
+
+.patient-history-panel > h3 {
+  margin-bottom: 12px;
+}
+
+.visit-history-card + .visit-history-card {
+  margin-top: 12px;
+}
+
+.visit-history-heading {
+  align-items: flex-start;
+}
+
+.visit-history-heading h4,
+.visit-history-heading p {
+  margin: 0 0 6px;
+}
+
+.visit-medicine-list {
+  display: grid;
+  gap: 8px;
+  padding-left: 20px;
+}
+
+.visit-medicine-list li span {
+  display: block;
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.patient-summary {
+  padding: 12px;
+  border-left: 3px solid var(--blue);
+  background: var(--blue-soft);
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.prescription-entry-panel {
+  margin: 20px 0;
+  padding: 16px;
+  border: 1px solid var(--line);
+  background: #fbfdff;
+}
+
+.prescription-entry-panel > p {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.prescription-entry-panel {
+  display: grid;
+  gap: 10px;
+}
+
+.doctor-workflow-card [hidden] {
+  display: none !important;
+}
+
+@media (max-width: 680px) {
+  .patient-search-grid,
+  .patient-registration-form,
+  .patient-details-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .patient-search-input,
+  .patient-card-heading,
+  .visit-history-heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .patient-search-input .primary-button,
+  .patient-card-heading .secondary-button,
+  .visit-history-heading .secondary-button {
+    width: 100%;
+  }
+
+  .patient-mobile-update {
+    grid-template-columns: 1fr;
+  }
+}
+
+html[data-user-role="doctor"] .app-shell {
+  width: min(100%, 1180px);
+  padding: 28px 32px 36px;
+}
+
+html[data-user-role="doctor"] #generatorTab.active-section .section-heading {
+  display: block !important;
+}
+
+@media (max-width: 560px) {
+  html[data-user-role="doctor"] .app-shell {
+    width: calc(100% - 24px);
+    padding: 22px 18px 30px;
+  }
 }
 
 /* Role-based home and section visibility */
@@ -1387,5 +1648,226 @@ main > #tabGenerator,
 
   #alertsSection.active-section .alert-grid {
     grid-template-columns: 1fr;
+  }
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.header-actions form { margin: 0; }
+.header-login-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 38px;
+  padding: 8px 13px;
+  border: 1px solid #d5deeb;
+  background: #fff;
+  color: #174a70;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 650;
+  text-decoration: none;
+  cursor: pointer;
+}
+.header-login-link:hover { background: #f0f7fb; }
+.signed-in-user { color: var(--muted); font-size: 13px; }
+
+.auth-page {
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+  padding: 24px;
+  background:
+    radial-gradient(circle at 15% 15%, rgba(32, 132, 154, .11), transparent 34%),
+    #f3f6fa;
+}
+.auth-card {
+  width: min(100%, 430px);
+  padding: 38px;
+  border: 1px solid #e1e8f0;
+  background: #fff;
+  text-align: left;
+  box-shadow: 0 18px 48px rgba(27, 55, 80, .1);
+}
+.auth-brand {
+  color: #174a70;
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: .12em;
+  text-decoration: none;
+}
+.auth-eyebrow {
+  margin-top: 32px;
+  color: #287c88;
+  font-size: 11px;
+  font-weight: 750;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
+.auth-card h1 {
+  margin-top: 8px;
+  color: #1c3042;
+  font-size: 28px;
+}
+.auth-description {
+  margin-top: 8px;
+  color: #687889;
+  font-size: 14px;
+  line-height: 1.6;
+}
+.auth-form {
+  display: grid;
+  gap: 10px;
+  margin-top: 26px;
+}
+.auth-form label {
+  margin-top: 8px;
+  color: #304558;
+  font-size: 13px;
+  font-weight: 650;
+}
+.auth-form input {
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 1px solid #cbd6e2;
+  border-radius: 4px;
+  background: #fff;
+  color: #1c3042;
+  font: inherit;
+}
+.auth-form input:focus {
+  border-color: #287c88;
+  outline: 3px solid rgba(40, 124, 136, .14);
+}
+.auth-submit {
+  min-height: 46px;
+  margin-top: 14px;
+  border: 0;
+  border-radius: 4px;
+  background: #176f79;
+  color: #fff;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+.auth-submit:hover { background: #125c64; }
+.auth-error {
+  margin-top: 18px;
+  padding: 11px 12px;
+  border-left: 3px solid #b52e32;
+  background: #fff0ef;
+  color: #8d2428;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.auth-back-button {
+  display: inline-block;
+  margin-top: 22px;
+  padding: 9px 14px;
+  border: 1px solid #cbd6e2;
+  border-radius: 4px;
+  background: #fff;
+  color: #41647c;
+  font-size: 13px;
+  text-decoration: none;
+  cursor: pointer;
+}
+.auth-back-button:hover {
+  border-color: #287c88;
+  background: #f0f7fb;
+}
+
+@media (max-width: 560px) {
+  .header-actions { flex-wrap: wrap; justify-content: flex-end; gap: 7px; }
+  .header-login-link { padding: 7px 9px; font-size: 11px; }
+  .signed-in-user { display: none; }
+  .auth-card { padding: 28px 22px; }
+}
+
+html[data-user-role="public"] .app-shell {
+  width: min(100%, 680px);
+  padding: 36px 38px 44px;
+}
+
+html[data-user-role="public"] .app-header {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  min-height: 0;
+  padding: 0 0 28px;
+  border-bottom: 1px solid #e1e8f0;
+}
+
+html[data-user-role="public"] .app-header::after {
+  display: none;
+}
+
+html[data-user-role="public"] .app-layout {
+  margin-top: 0;
+}
+
+html[data-user-role="public"] #dashboardSection.active-section {
+  padding: 26px 0 8px;
+}
+
+html[data-user-role="public"] .home-description {
+  margin: 18px 0 24px;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+html[data-user-role="public"] .role-buttons {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  width: 100%;
+  max-width: none;
+}
+
+html[data-user-role="public"] .role-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 46px;
+  padding: 10px 12px;
+  line-height: 1.35;
+  text-decoration: none;
+}
+
+@media (max-width: 560px) {
+  html[data-user-role="public"] .app-shell {
+    width: calc(100% - 24px);
+    padding: 26px 20px 34px;
+  }
+
+  html[data-user-role="public"] .app-header {
+    gap: 18px;
+    padding-bottom: 22px;
+  }
+
+  html[data-user-role="public"] .role-buttons {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  html[data-user-role="public"] #dashboardSection.active-section {
+    padding-top: 22px;
+  }
+
+  html[data-user-role="public"] .home-description {
+    margin: 16px 0 20px;
+  }
+}
+
+@media (max-width: 360px) {
+  html[data-user-role="public"] .app-shell {
+    width: 100%;
+    padding-right: 16px;
+    padding-left: 16px;
   }
 }

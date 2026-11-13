@@ -4,10 +4,17 @@ import re
 import time
 import shutil
 import json
+import hashlib
 import logging
 import uuid
+import hmac
+import secrets
+from functools import wraps
+import doctor_database as doctor_db
+from interaction_analysis import analyze_medicine_interactions
 from database import (
     init_database,
+    normalize_expiry,
     add_medicine,
     get_all_medicines,
     get_medicine,
@@ -38,7 +45,7 @@ try:
 except Exception:
     def send_sms(patient_name, phone_number, download_url):
         return None
-from flask import Flask, request, jsonify, render_template, send_from_directory
+from flask import Flask, request, jsonify, render_template, send_from_directory, session, redirect, url_for
 from werkzeug.utils import secure_filename
 from difflib import get_close_matches
 from datetime import datetime, timedelta
@@ -110,7 +117,52 @@ logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
+app.config.update(
+    SECRET_KEY=os.getenv("FLASK_SECRET_KEY") or secrets.token_hex(32),
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_SECURE=os.getenv("SESSION_COOKIE_SECURE", "false").lower() == "true",
+    PERMANENT_SESSION_LIFETIME=timedelta(hours=8),
+    AUTH_USERS={
+        "doctor": {
+            "user_id": os.getenv("DOCTOR_ID", ""),
+            "password": os.getenv("DOCTOR_PASSWORD", ""),
+        },
+        "medical_staff": {
+            "user_id": os.getenv("STAFF_ID", ""),
+            "password": os.getenv("STAFF_PASSWORD", ""),
+        },
+    },
+)
+if not os.getenv("FLASK_SECRET_KEY"):
+    logger.warning("FLASK_SECRET_KEY is unset; sessions will not survive application restarts.")
 init_database()
+doctor_db.init_database()
+
+
+def role_required(role, api=False):
+    def decorator(view):
+        @wraps(view)
+        def wrapped_view(*args, **kwargs):
+            current_role = session.get("role")
+            if current_role != role:
+                if current_role:
+                    if api:
+                        return jsonify({"error": "You do not have permission to access this resource."}), 403
+                    dashboard = (
+                        "doctor_dashboard"
+                        if current_role == "doctor"
+                        else "staff_dashboard"
+                    )
+                    return redirect(url_for(dashboard))
+                if api:
+                    return jsonify({"error": "Authentication required."}), 401
+                login_page = "doctor_login" if role == "doctor" else "staff_login"
+                return redirect(url_for(login_page))
+            return view(*args, **kwargs)
+
+        return wrapped_view
+    return decorator
 
 
 UPLOAD_FOLDER = "uploads"
@@ -317,10 +369,25 @@ def parse_prescription(text):
         # ---------------- Dosage ----------------
 
         dosage = "As directed"
+        dosage_text = re.sub(
+            r'\bfor\s+\d+\s+(?:day|days|week|weeks|month|months)\b.*$',
+            '',
+            line_lower
+        )
+        dosage_text = re.sub(
+            r'\b(?:once|twice|thrice)\s+(?:daily|a day|per day|weekly|a week|per week)\b',
+            '',
+            dosage_text
+        )
+        dosage_text = re.sub(
+            r'\b\d+\s*(?:times?\s+(?:daily|a day|per day)|per day)\b',
+            '',
+            dosage_text
+        )
 
         d = re.search(
-            r'(\d+(?:/\d+)?)\s*(mg|ml|mcg|g|tablet|tab|capsule|cap)?',
-            line_lower
+            r'(?<![A-Za-z0-9])(\d+(?:/\d+)?)\s*(mg|ml|mcg|g|tablet|tab|capsule|cap)?',
+            dosage_text
         )
 
         if d:
@@ -335,17 +402,20 @@ def parse_prescription(text):
 
         if ("once daily" in line_lower or
             "once per day" in line_lower or
+            "once a day" in line_lower or
             "1 per day" in line_lower):
 
             frequency = "Once daily"
 
         elif ("twice daily" in line_lower or
               "twice a day" in line_lower or
+              "twice per day" in line_lower or
               "2 per day" in line_lower):
 
             frequency = "Twice daily"
 
         elif ("thrice daily" in line_lower or
+              "thrice a day" in line_lower or
               "3 per day" in line_lower):
 
             frequency = "Thrice daily"
@@ -365,18 +435,45 @@ def parse_prescription(text):
         duration = "As directed"
 
         dur = re.search(
-            r'for\s+(\d+)\s+(day|days|week|weeks|month|months)',
+            r'for\s+(\d+)\s+(days|day|weeks|week|months|month)',
             line_lower
         )
 
         if dur:
             duration = f"{dur.group(1)} {dur.group(2)}"
 
+        instructions = line_lower
+        instructions = re.sub(r'^[A-Za-z]+', '', instructions, count=1)
+        instructions = re.sub(
+            r'\b(?:once|twice|thrice)\s+(?:daily|a day|per day|weekly|a week|per week)\b',
+            ' ',
+            instructions,
+        )
+        instructions = re.sub(
+            r'\b\d+\s*(?:times?\s+(?:daily|a day|per day)|per day)\b',
+            ' ',
+            instructions,
+        )
+        instructions = re.sub(
+            r'\bfor\s+\d+\s+(?:day|days|week|weeks|month|months)\b',
+            ' ',
+            instructions,
+        )
+        instructions = re.sub(
+            r'(?<![A-Za-z0-9])\d+(?:/\d+)?\s*(?:mg|ml|mcg|g|tablet|tab|capsule|cap)?\b',
+            ' ',
+            instructions,
+            count=1,
+        )
+        instructions = re.sub(r'\b(?:take|please)\b', ' ', instructions)
+        instructions = re.sub(r'[\s,;:-]+', ' ', instructions).strip()
+
         medicines.append({
             "name": medicine,
             "dosage": dosage,
             "frequency": frequency,
-            "duration": duration
+            "duration": duration,
+            "instructions": instructions,
         })
 
     return {
@@ -384,7 +481,7 @@ def parse_prescription(text):
         "age": "Not set",
         "gender": "Not set",
         "doctor": "Dr. XYZ",
-        "clinic": "Shri XYZ Clinic",
+        "clinic": "XYZ Clinic",
         "address": "xyzabc",
         "phone": "+91 **********",
         "email": "xyz@gmail.com",
@@ -392,10 +489,10 @@ def parse_prescription(text):
     }
 
 
-def create_prescription_filename(patient_name):
+def create_prescription_filename(patient_name, visit_id):
     safe_name = re.sub(r'[^A-Za-z0-9_]+', '_', patient_name)
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    return f'prescription_{safe_name}_{timestamp}.pdf'
+    safe_visit_id = re.sub(r'[^A-Za-z0-9_-]+', '_', visit_id)
+    return f'prescription_{safe_name}_{safe_visit_id}.pdf'
 
 
 def generate_prescription_pdf(data, download_url, filepath):
@@ -405,7 +502,7 @@ def generate_prescription_pdf(data, download_url, filepath):
 
     pdf.set_font('Arial', 'B', 14)
     pdf.set_text_color(0, 0, 128)
-    pdf.cell(0, 6, 'SHRI XYZ CLINIC', 0, 1, 'C')
+    pdf.cell(0, 6, 'XYZ CLINIC', 0, 1, 'C')
     pdf.set_font('Arial', '', 9)
     pdf.set_text_color(0, 0, 0)
     pdf.cell(0, 5, 'Serving Health Since 1990', 0, 1, 'C')
@@ -416,7 +513,14 @@ def generate_prescription_pdf(data, download_url, filepath):
     # ===================== DATE =====================
     pdf.set_font("Arial", "", 9)
     pdf.set_xy(165, 28)
-    pdf.cell(30, 6, f"Date: {datetime.now().strftime('%d/%m/%Y')}", 0, 0, "R")
+    pdf.cell(
+        30,
+        6,
+        f"Date: {datetime.now(doctor_db.INDIA_TIMEZONE).strftime('%d/%m/%Y')}",
+        0,
+        0,
+        "R",
+    )
 
     # ===================== DETAILS =====================
 
@@ -437,6 +541,7 @@ def generate_prescription_pdf(data, download_url, filepath):
     row2 = 50
     row3 = 58
     row4 = 66
+    row5 = 74
 
 # -------- LEFT SIDE --------
 
@@ -467,12 +572,20 @@ def generate_prescription_pdf(data, download_url, filepath):
     pdf.cell(label_w, 6, "Gender:", 0, 0)
     pdf.set_font("Arial", "", 9)
     pdf.cell(value_w, 6, data["gender"], 0, 0)
-        # -------- RIGHT SIDE --------
 
-    # Doctor Name
+    # Patient ID
+    pdf.set_xy(left_x, row5)
+    pdf.set_font("Arial", "B", 9)
+    pdf.cell(label_w, 6, "Patient ID:", 0, 0)
+    pdf.set_font("Arial", "", 9)
+    pdf.cell(value_w, 6, data["patient_id"], 0, 0)
+
+    # -------- RIGHT SIDE --------
+
+    # Doctor ID
     pdf.set_xy(right_x, row1)
     pdf.set_font("Arial", "B", 9)
-    pdf.cell(label_w, 6, "Doctor Name:", 0, 0)
+    pdf.cell(label_w, 6, "Doctor ID:", 0, 0)
     pdf.set_font("Arial", "", 9)
     pdf.cell(0, 6, data["doctor"], 0, 0)
 
@@ -482,6 +595,13 @@ def generate_prescription_pdf(data, download_url, filepath):
     pdf.cell(label_w, 6, "Clinic:", 0, 0)
     pdf.set_font("Arial", "", 9)
     pdf.cell(0, 6, data["clinic"], 0, 0)
+
+    # Visit ID
+    pdf.set_xy(right_x, row3)
+    pdf.set_font("Arial", "B", 9)
+    pdf.cell(label_w, 6, "Visit ID:", 0, 0)
+    pdf.set_font("Arial", "", 9)
+    pdf.cell(0, 6, data["visit_id"], 0, 0)
 
     pdf.set_y(82)
     pdf.set_font('Arial', 'B', 8)
@@ -636,65 +756,73 @@ def generate_prescription_pdf(data, download_url, filepath):
 
 
 @app.route('/generate-prescription', methods=['POST'])
+@role_required("doctor", api=True)
 def generate_prescription():
     try:
         if request.is_json:
-            payload = request.get_json()
+            payload = request.get_json(silent=True)
         else:
             payload = request.form.to_dict()
 
-        patient_name = (payload.get("patient_name") or "").strip()
-        age          = (payload.get("age")          or "").strip()
-        gender       = (payload.get("gender")       or "").strip()
-        phone_number = (payload.get("phone_number") or "").strip()
+        if not isinstance(payload, dict):
+            return jsonify({
+                "error": "Prescription data must be provided as an object.",
+                "missing_fields": [],
+                "field_errors": {},
+            }), 400
 
-        # ── Validate shared patient fields ──────────────────────────────────
-        if not patient_name:
-            return jsonify({'error': 'Patient name is required.'}), 400
-        if not age:
-            return jsonify({'error': 'Age is required.'}), 400
-        if not gender:
-            return jsonify({'error': 'Gender is required.'}), 400
-        if not phone_number:
-            return jsonify({'error': 'Phone number is required.'}), 400
+        def text_value(value):
+            return value.strip() if isinstance(value, str) else ""
 
-        try:
-            age_int = int(age)
-            if age_int < 1 or age_int > 150:
-                return jsonify({'error': 'Age must be between 1 and 150.'}), 400
-        except ValueError:
-            return jsonify({'error': 'Age must be a valid number.'}), 400
+        patient_id = text_value(payload.get("patient_id"))
+        if not patient_id:
+            return jsonify({"error": "Select or register a patient before prescribing."}), 400
+        patient = doctor_db.get_patient(patient_id)
+        if not patient:
+            return jsonify({"error": "Patient not found."}), 404
 
-        # ── PATH A: Structured medicines[] supplied by new frontend ──────────
+        patient_name = patient["patient_name"]
+        age = str(patient["age"])
+        gender = patient["gender"]
+        phone_number = patient["mobile_number"]
+        field_errors = {}
+        prescription_text = text_value(payload.get("text"))
+
+        # ── PATH A: Structured medicines[] ──────────────────────────────────
         medicines_raw = payload.get("medicines")
+        if "medicines" in payload and not isinstance(medicines_raw, list):
+            field_errors["medicines"] = "Medicines must be provided as a list."
+            medicines_raw = []
 
-        if medicines_raw and isinstance(medicines_raw, list) and len(medicines_raw) > 0:
-            # Validate each medicine object
+        if isinstance(medicines_raw, list) and medicines_raw:
             medicines_list = []
             for idx, m in enumerate(medicines_raw):
                 if not isinstance(m, dict):
-                    return jsonify({'error': f'Medicine #{idx+1} has invalid format.'}), 400
+                    field_errors[f"medicines[{idx}]"] = (
+                        f"Medicine #{idx + 1} has invalid information."
+                    )
+                    continue
 
-                name    = (m.get("name")    or "").strip()
-                dosage  = (m.get("dosage")  or "").strip()
-                frequency = (m.get("frequency") or "").strip()
-                food_instruction = (m.get("food_instruction") or "").strip()
-                duration = (m.get("duration") or "").strip()
+                name = text_value(m.get("name"))
+                dosage = text_value(m.get("dosage"))
+                frequency = text_value(m.get("frequency"))
+                food_instruction = text_value(m.get("food_instruction"))
+                duration = text_value(m.get("duration"))
                 timing  = m.get("timing", [])
-                special = (m.get("special_instructions") or "").strip()
+                special = text_value(m.get("special_instructions"))
+                instructions = text_value(m.get("instructions")) or special
 
                 if not name:
-                    return jsonify({'error': f'Medicine #{idx+1}: name is required.'}), 400
+                    field_errors[f"medicines[{idx}].name"] = (
+                        f"Medicine #{idx + 1}: name is required."
+                    )
                 if not dosage:
-                    return jsonify({'error': f'Medicine #{idx+1}: dosage is required.'}), 400
-                if not frequency:
-                    return jsonify({'error': f'Medicine #{idx+1}: frequency is required.'}), 400
-                if not food_instruction:
-                    return jsonify({'error': f'Medicine #{idx+1}: food instruction is required.'}), 400
-                if not duration:
-                    return jsonify({'error': f'Medicine #{idx+1}: duration is required.'}), 400
+                    field_errors[f"medicines[{idx}].dosage"] = (
+                        f"Medicine #{idx + 1}: dosage is required."
+                    )
                 if not isinstance(timing, list):
                     timing = []
+                timing = [value.strip() for value in timing if isinstance(value, str) and value.strip()]
 
                 medicines_list.append({
                     "name":                name,
@@ -703,16 +831,16 @@ def generate_prescription():
                     "timing":              timing,
                     "food_instruction":    food_instruction,
                     "duration":            duration,
+                    "instructions":        instructions,
                     "special_instructions": special,
                 })
 
-            # Build the data dict for PDF generation (structured path)
             data = {
                 "name":         patient_name,
-                "age":          age + " years",
+                "age":          f"{age} years" if age else "",
                 "gender":       gender,
                 "phone_number": "+91" + phone_number,
-                "doctor":       "Dr. XYZ",
+                "doctor":       session["user_id"],
                 "clinic":       "Shri XYZ Clinic",
                 "address":      "xyzabc",
                 "phone":        "+91 **********",
@@ -720,41 +848,117 @@ def generate_prescription():
                 "medicines":    medicines_list,
             }
 
-        # ── PATH B: Legacy free-text (old frontend / backward compat) ────────
+        # ── PATH B: Existing free-text prescription form ─────────────────────
         else:
-            text = (payload.get("text") or "").strip()
+            if not prescription_text:
+                field_errors["medicines"] = (
+                    "Record a prescription before generating the prescription."
+                )
+                data = None
+            else:
+                cleaned = clean_prescription_text(prescription_text)
+                medicine_lines = [
+                    line.strip()
+                    for line in re.split(r'[\n\.]+', cleaned)
+                    if line.strip()
+                ]
 
-            if not text:
-                return jsonify({
-                    'error': 'Please add at least one medicine before generating the prescription.'
-                }), 400
+                if not validate_prescription_text(cleaned):
+                    field_errors["medicines"] = (
+                        "Enter at least one valid medicine in the prescription."
+                    )
 
-            cleaned = clean_prescription_text(text)
+                parsed_medicines = []
+                for idx, line in enumerate(medicine_lines):
+                    line_data = parse_prescription(line)["medicines"]
+                    if not line_data:
+                        field_errors[f"medicines[{idx}].name"] = (
+                            f"Medicine #{idx + 1}: enter a medicine name."
+                        )
+                        continue
 
-            if not validate_prescription_text(cleaned):
-                return jsonify({
-                    'error': 'Invalid prescription text. Please include at least one medicine.'
-                }), 400
+                    medicine = line_data[0]
+                    if medicine["dosage"] == "As directed":
+                        field_errors[f"medicines[{idx}].dosage"] = (
+                            f"Medicine #{idx + 1}: enter dosage information."
+                        )
+                    parsed_medicines.extend(line_data)
 
-            data = parse_prescription(cleaned)
+                data = parse_prescription(cleaned)
+                data["medicines"] = parsed_medicines
+                data["name"] = patient_name
+                data["age"] = f"{age} years" if age else ""
+                data["gender"] = gender
+                data["phone_number"] = "+91" + phone_number
 
-            # Override with manually entered patient details
-            data["name"]         = patient_name
-            data["age"]          = age + " years"
-            data["gender"]       = gender
-            data["phone_number"] = "+91" + phone_number
+        if not medicines_raw and not prescription_text:
+            field_errors.setdefault(
+                "medicines",
+                "Record a prescription before generating the prescription."
+            )
 
-        # ── Generate PDF (same for both paths) ───────────────────────────────
-        filename          = create_prescription_filename(data["name"])
+        if field_errors:
+            return jsonify({
+                "error": "Missing required information. Please complete the highlighted fields.",
+                "missing_fields": list(field_errors),
+                "field_errors": field_errors,
+            }), 400
+
+        data["doctor"] = session["user_id"]
+        for medicine in data["medicines"]:
+            medicine.setdefault("frequency", "")
+            medicine.setdefault("duration", "")
+            medicine.setdefault("timing", [])
+            medicine.setdefault("food_instruction", "")
+            medicine.setdefault("special_instructions", "")
+            medicine.setdefault(
+                "instructions",
+                medicine.get("special_instructions", ""),
+            )
+
+        visit_id = f"VIS-{uuid.uuid4().hex[:16].upper()}"
+        data["patient_id"] = patient_id
+        data["visit_id"] = visit_id
+
+        diagnosis = text_value(payload.get("diagnosis"))
+        notes = prescription_text or text_value(payload.get("notes"))
+        if not isinstance(payload.get("diagnosis", ""), str) or not isinstance(
+            payload.get("notes", ""), str
+        ):
+            return jsonify({"error": "Diagnosis and notes must be text values."}), 400
+
+        # Generate the existing PDF first; only persist its reference when it exists.
+        filename = create_prescription_filename(data["name"], visit_id)
         filepath          = os.path.join(GENERATED_FOLDER, filename)
-        local_download_url = request.host_url.rstrip("/") + "/download/" + filename
+        local_download_url = url_for(
+            "download_patient_visit_pdf",
+            patient_id=patient_id,
+            visit_id=visit_id,
+            _external=True,
+        )
 
-        generate_prescription_pdf(data, local_download_url, filepath)
+        try:
+            generate_prescription_pdf(data, local_download_url, filepath)
+            if not os.path.exists(filepath):
+                raise FileNotFoundError(
+                    f"Generated prescription PDF not found at: {filepath}"
+                )
+            if os.path.getsize(filepath) <= 0:
+                raise ValueError(f"Generated prescription PDF is empty: {filepath}")
 
-        if not os.path.exists(filepath):
-            raise FileNotFoundError(f"Generated prescription PDF not found at: {filepath}")
-        if os.path.getsize(filepath) <= 0:
-            raise ValueError(f"Generated prescription PDF is empty: {filepath}")
+            doctor_db.save_visit(
+                patient_id,
+                session["user_id"],
+                diagnosis,
+                notes,
+                filename,
+                data["medicines"],
+                visit_id=visit_id,
+            )
+        except Exception:
+            if os.path.exists(filepath):
+                os.remove(filepath)
+            raise
 
         # ── Keep local download available when Google Drive is not configured ─
         drive_url = None
@@ -781,6 +985,9 @@ def generate_prescription():
             "drive_url":          drive_url,
             "filename":           filename,
             "patient":            data["name"],
+            "patient_id":         patient_id,
+            "visit_id":           visit_id,
+            "doctor_id":          session["user_id"],
             "phone_number":       data["phone_number"],
             "age":                data["age"],
             "gender":             data["gender"],
@@ -795,10 +1002,12 @@ def generate_prescription():
 
 
 @app.route('/generated/<path:filename>')
+@role_required("doctor")
 def serve_generated_file(filename):
     return send_from_directory(GENERATED_FOLDER, filename, as_attachment=True)
 
 @app.route("/download/<filename>")
+@role_required("doctor")
 def download_file(filename):
     return send_from_directory(
         GENERATED_FOLDER,
@@ -807,10 +1016,20 @@ def download_file(filename):
     )
 
 
-def get_medicine_info_gemini(medicine_ocr, expiry_ocr="", language='English'):
-    """Get medicine information from Gemini using OCR text"""
+def get_medicine_info_gemini(
+    medicine_ocr,
+    expiry_ocr="",
+    language='English',
+    generic_name="",
+    brand_name="",
+    strength="",
+    dosage_form=""
+):
+    """Get medicine information and cautious suggestions from Gemini."""
     if not medicine_ocr or client is None:
         return None
+
+    unavailable = "Information not available"
 
     if language.lower() == 'kannada':
         language_instruction = """
@@ -831,6 +1050,18 @@ You are given OCR text extracted from a medicine package.
 
 MEDICINE OCR:
 {medicine_ocr}
+
+IDENTIFIED GENERIC NAME, IF AVAILABLE:
+{generic_name or unavailable}
+
+SCANNED BRAND NAME, IF AVAILABLE:
+{brand_name or unavailable}
+
+EXTRACTED STRENGTH, IF AVAILABLE:
+{strength or unavailable}
+
+EXTRACTED DOSAGE FORM, IF AVAILABLE:
+{dosage_form or unavailable}
 
 EXPIRY OCR:
 {expiry_ocr}
@@ -854,7 +1085,9 @@ Identify:
 5. Expiry date
 6. Main established/common uses
 7. Common side effects
-8. Suitable alternatives
+8. Same-ingredient brand suggestions
+9. Other medicines a doctor might consider for the same condition or
+   therapeutic purpose
 
 For the expiry date:
 - Look specifically for words such as EXP, EXPIRY, EXP DATE,
@@ -874,10 +1107,25 @@ For medicine identification:
 - Ignore words such as Tablets, Capsules, IP, Batch, MFG,
   Storage, Warning, etc. when identifying the brand/generic name.
 
-IMPORTANT:
-Do not invent information.
-If something cannot be determined reliably, write:
-"Information not available".
+Suggestion safety requirements:
+- Never invent medicine brands, ingredients, strengths or dosage forms.
+- Only report information you can identify with reasonable confidence.
+- Same-ingredient brand suggestions must contain the same active
+  ingredient(s) as the scanned medicine. Do not assume similar brand
+  names have the same composition.
+- Exclude the scanned brand from same-ingredient suggestions.
+- Report each suggested brand's strength independently. Never infer it
+  from the scanned medicine's strength or append the scanned strength.
+- For an unknown strength, dosage form, generic name or reason, use
+  "Information not available".
+- If you cannot confidently identify the active ingredient(s), return
+  empty arrays for both suggestion categories.
+- Other drug options are not equivalent or interchangeable medicines.
+  Do not include dosage or strength information for them.
+- Do not claim suggestions are verified or clinically interchangeable.
+
+Do not invent any other information. If a medicine detail cannot be
+identified reliably, return "Information not available".
 
 Return ONLY valid JSON in exactly this format:
 
@@ -889,10 +1137,24 @@ Return ONLY valid JSON in exactly this format:
     "expiry_date": "",
     "uses": [],
     "side_effects": [],
-    "alternatives": []
+    "same_ingredient_alternatives": [
+        {{
+            "brand_name": "",
+            "generic_name": "",
+            "strength": "",
+            "dosage_form": ""
+        }}
+    ],
+    "other_drug_options": [
+        {{
+            "medicine_name": "",
+            "reason": ""
+        }}
+    ]
 }}
 
-Keep each list concise (max 5 items per list).
+Keep each list concise (max 5 items per list). Return empty arrays when
+reliable suggestions cannot be provided.
 """
 
     try:
@@ -901,39 +1163,122 @@ Keep each list concise (max 5 items per list).
             contents=prompt
         )
 
-        text = response.text.strip()
-        text = text.replace("```json", "").replace("```", "").strip()
+        text = response.text
+        if not isinstance(text, str) or not text.strip():
+            logger.warning("Gemini returned an empty or non-text response")
+            return None
+        text = text.strip()
+        if text.startswith("```"):
+            text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
+            text = re.sub(r"\s*```$", "", text)
         data = json.loads(text)
 
         if not isinstance(data, dict):
             logger.warning("Gemini returned non-dict JSON")
             return None
 
+        def clean_value(value):
+            if not isinstance(value, str) or not value.strip():
+                return unavailable
+            cleaned = value.strip()
+            if cleaned.casefold() in {
+                "unknown", "uncertain", "not sure", "n/a", "na"
+            }:
+                return unavailable
+            return cleaned
+
+        def has_information(value):
+            return value != unavailable
+
+        def identity_key(value):
+            return "".join(re.findall(r"[a-z0-9]+", value.casefold()))
+
+        def clean_string_list(value):
+            if not isinstance(value, list):
+                return []
+            cleaned = []
+            seen = set()
+            for item in value:
+                text_item = clean_value(item)
+                key = text_item.casefold()
+                if has_information(text_item) and key not in seen:
+                    cleaned.append(text_item)
+                    seen.add(key)
+            return cleaned[:5]
+
         result = {
-            'generic_name': 'Information not available',
-            'brand_name': 'Information not available',
-            'strength': 'Information not available',
-            'dosage_form': 'Information not available',
-            'expiry_date': 'Information not available',
+            'generic_name': clean_value(data.get('generic_name')),
+            'brand_name': clean_value(data.get('brand_name')),
+            'strength': clean_value(data.get('strength')),
+            'dosage_form': clean_value(data.get('dosage_form')),
+            'expiry_date': clean_value(data.get('expiry_date')),
             'uses': [],
             'side_effects': [],
-            'alternatives': [],
+            'same_ingredient_alternatives': [],
+            'other_drug_options': [],
             'source': 'Gemini'
         }
 
-        result['generic_name'] = data.get('generic_name', 'Information not available') or 'Information not available'
-        result['brand_name'] = data.get('brand_name', 'Information not available') or 'Information not available'
-        result['strength'] = data.get('strength', 'Information not available') or 'Information not available'
-        result['dosage_form'] = data.get('dosage_form', 'Information not available') or 'Information not available'
-        result['expiry_date'] = data.get('expiry_date', 'Information not available') or 'Information not available'
+        result['uses'] = clean_string_list(data.get('uses'))
+        result['side_effects'] = clean_string_list(data.get('side_effects'))
 
-        for key in ['uses', 'side_effects', 'alternatives']:
-            value = data.get(key, [])
-            if isinstance(value, list):
-                cleaned = [item for item in value if isinstance(item, str) and item.strip()]
-                result[key] = cleaned[:5]
-            else:
-                result[key] = []
+        # If the ingredient is uncertain, neither suggestion category is safe.
+        if has_information(result['generic_name']):
+            scanned_brand_keys = {
+                identity_key(value)
+                for value in (brand_name, result['brand_name'])
+                if isinstance(value, str) and has_information(clean_value(value))
+            }
+            scanned_generic_key = identity_key(result['generic_name'])
+            seen_brands = set()
+            suggestions = data.get('same_ingredient_alternatives')
+            if isinstance(suggestions, list):
+                for suggestion in suggestions:
+                    if not isinstance(suggestion, dict):
+                        continue
+                    cleaned = {
+                        'brand_name': clean_value(suggestion.get('brand_name')),
+                        'generic_name': clean_value(suggestion.get('generic_name')),
+                        'strength': clean_value(suggestion.get('strength')),
+                        'dosage_form': clean_value(suggestion.get('dosage_form'))
+                    }
+                    brand_key = identity_key(cleaned['brand_name'])
+                    generic_key = identity_key(cleaned['generic_name'])
+                    if (
+                        not has_information(cleaned['brand_name'])
+                        or not has_information(cleaned['generic_name'])
+                        or not brand_key
+                        or generic_key != scanned_generic_key
+                        or brand_key in scanned_brand_keys
+                        or brand_key in seen_brands
+                    ):
+                        continue
+                    result['same_ingredient_alternatives'].append(cleaned)
+                    seen_brands.add(brand_key)
+                    if len(result['same_ingredient_alternatives']) == 5:
+                        break
+
+            other_options = data.get('other_drug_options')
+            seen_medicines = set()
+            if isinstance(other_options, list):
+                for option in other_options:
+                    if not isinstance(option, dict):
+                        continue
+                    cleaned = {
+                        'medicine_name': clean_value(option.get('medicine_name')),
+                        'reason': clean_value(option.get('reason'))
+                    }
+                    medicine_key = identity_key(cleaned['medicine_name'])
+                    if (
+                        not has_information(cleaned['medicine_name'])
+                        or not medicine_key
+                        or medicine_key in seen_medicines
+                    ):
+                        continue
+                    result['other_drug_options'].append(cleaned)
+                    seen_medicines.add(medicine_key)
+                    if len(result['other_drug_options']) == 5:
+                        break
 
         return result
 
@@ -2090,7 +2435,360 @@ def process_with_yolo(image_path):
 
 @app.route('/')
 def index():
-    return render_template('index.html')
+    return render_template(
+        'index.html',
+        user_role="public",
+        initial_section="dashboardSection",
+    )
+
+
+def render_login(role, error=None, status=200):
+    role_name = "Doctor" if role == "doctor" else "Medical Staff"
+    return render_template(
+        "login.html",
+        role=role,
+        role_name=role_name,
+        id_label="Doctor ID" if role == "doctor" else "Staff ID",
+        error=error,
+    ), status
+
+
+def authenticate_role(role):
+    if session.get("role") == role:
+        return redirect(
+            url_for("doctor_dashboard" if role == "doctor" else "staff_dashboard")
+        )
+
+    if request.method == "GET":
+        return render_login(role)
+
+    credentials = app.config["AUTH_USERS"][role]
+    configured_id = credentials["user_id"]
+    configured_password = credentials["password"]
+    if not configured_id or not configured_password:
+        logger.error("%s login attempted before credentials were configured.", role)
+        return render_login(
+            role,
+            "Login is not configured. Set this account's ID and password in the environment.",
+            503,
+        )
+
+    submitted_id = request.form.get("user_id", "").strip()
+    submitted_password = request.form.get("password", "")
+    if not (
+        hmac.compare_digest(submitted_id, configured_id)
+        and hmac.compare_digest(submitted_password, configured_password)
+    ):
+        return render_login(role, "The ID or password is incorrect.", 401)
+
+    session.clear()
+    session.permanent = True
+    session["role"] = role
+    session["user_id"] = configured_id
+    return redirect(
+        url_for("doctor_dashboard" if role == "doctor" else "staff_dashboard")
+    )
+
+
+@app.route("/doctor/login", methods=["GET", "POST"])
+def doctor_login():
+    return authenticate_role("doctor")
+
+
+@app.route("/staff/login", methods=["GET", "POST"])
+def staff_login():
+    return authenticate_role("medical_staff")
+
+
+@app.route("/logout", methods=["POST"])
+def logout():
+    session.clear()
+    return redirect(url_for("index"))
+
+
+@app.route("/doctor/dashboard")
+@role_required("doctor")
+def doctor_dashboard():
+    return render_template(
+        "index.html",
+        user_role="doctor",
+        initial_section="generatorTab",
+        user_id=session.get("user_id"),
+    )
+
+
+@app.route("/staff/dashboard")
+@role_required("medical_staff")
+def staff_dashboard():
+    return render_template(
+        "index.html",
+        user_role="medical_staff",
+        initial_section="inventorySection",
+        user_id=session.get("user_id"),
+    )
+
+
+def _patient_response(patient):
+    fields = (
+        "patient_id",
+        "patient_name",
+        "mobile_number",
+        "age",
+        "gender",
+        "address",
+        "created_at",
+    )
+    return {field: patient[field] for field in fields}
+
+
+def _medicine_names_for_analysis(payload):
+    medicines = payload.get("medicines")
+    if isinstance(medicines, list):
+        names = [
+            item.strip() if isinstance(item, str) else
+            item.get("name", "").strip() if isinstance(item, dict)
+            and isinstance(item.get("name"), str) else ""
+            for item in medicines
+        ]
+    else:
+        text = payload.get("text", "")
+        if not isinstance(text, str) or not text.strip():
+            return []
+        parsed = parse_prescription(text)
+        names = [medicine["name"].strip() for medicine in parsed["medicines"]]
+    return [name for name in names if name]
+
+
+def _interaction_fingerprint(current_medicines, new_medicines):
+    normalized = {
+        "current": sorted(name.casefold() for name in current_medicines),
+        "new": sorted(name.casefold() for name in new_medicines),
+    }
+    return hashlib.sha256(
+        json.dumps(normalized, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+def _interaction_review_is_valid(payload, current_medicines, new_medicines):
+    review = session.get("interaction_review", {})
+    submitted_token = payload.get("interaction_review_token", "")
+    if not isinstance(submitted_token, str) or not submitted_token:
+        return False
+    expected_token_hash = hashlib.sha256(submitted_token.encode("utf-8")).hexdigest()
+    return (
+        isinstance(review, dict)
+        and hmac.compare_digest(review.get("token_hash", ""), expected_token_hash)
+        and hmac.compare_digest(
+            review.get("fingerprint", ""),
+            _interaction_fingerprint(current_medicines, new_medicines),
+        )
+    )
+
+
+@app.route("/doctor/patients/search", methods=["GET"])
+@role_required("doctor", api=True)
+def search_doctor_patients():
+    patient_id = request.args.get("patient_id", "").strip()
+    mobile_number = request.args.get("mobile_number", "").strip()
+    if bool(patient_id) == bool(mobile_number):
+        return jsonify({"error": "Search using either Patient ID or mobile number."}), 400
+    try:
+        patients = doctor_db.search_patients(
+            patient_id=patient_id or None,
+            mobile_number=mobile_number or None,
+        )
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
+    return jsonify({"patients": [_patient_response(patient) for patient in patients]})
+
+
+@app.route("/doctor/patients", methods=["POST"])
+@role_required("doctor", api=True)
+def create_doctor_patient():
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({"error": "Patient data must be provided as an object."}), 400
+
+    patient_name = payload.get("patient_name", "")
+    gender = payload.get("gender", "")
+    address = payload.get("address", "")
+    age_value = payload.get("age", "")
+    mobile_value = payload.get("mobile_number", "")
+    if not all(isinstance(value, str) for value in (patient_name, gender, address)):
+        return jsonify({"error": "Patient fields must be text values."}), 400
+
+    errors = {}
+    patient_name = patient_name.strip()
+    gender = gender.strip()
+    if not patient_name:
+        errors["patient_name"] = "Patient name is required."
+    elif len(patient_name) > 120:
+        errors["patient_name"] = "Patient name cannot exceed 120 characters."
+    if (
+        isinstance(age_value, bool)
+        or not isinstance(age_value, (str, int))
+        or not re.fullmatch(r"\d+", str(age_value))
+    ):
+        errors["age"] = "Age must be a valid whole number."
+        age = None
+    else:
+        age = int(age_value)
+        if age < 1 or age > 150:
+            errors["age"] = "Age must be between 1 and 150."
+    if gender not in {"Male", "Female", "Other"}:
+        errors["gender"] = "Select a valid gender."
+    try:
+        mobile_number = doctor_db.normalize_mobile_number(mobile_value)
+    except ValueError as error:
+        errors["mobile_number"] = str(error)
+    if errors:
+        return jsonify({"error": "Please correct the patient details.", "field_errors": errors}), 400
+
+    try:
+        patient = doctor_db.register_patient(
+            patient_name,
+            age,
+            gender,
+            mobile_number,
+            address,
+            session["user_id"],
+        )
+    except doctor_db.DuplicatePatientError as error:
+        return jsonify({
+            "error": str(error),
+            "existing_patients": [
+                _patient_response(existing_patient)
+                for existing_patient in error.patients
+            ],
+        }), 409
+    return jsonify({"success": True, "patient": _patient_response(patient)}), 201
+
+
+@app.route("/doctor/patients/<patient_id>", methods=["PUT"])
+@role_required("doctor", api=True)
+def update_doctor_patient(patient_id):
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict) or not isinstance(
+        payload.get("mobile_number"), str
+    ):
+        return jsonify({"error": "A mobile_number text value is required."}), 400
+    if not doctor_db.get_patient(patient_id):
+        return jsonify({"error": "Patient not found."}), 404
+    try:
+        mobile_number = doctor_db.normalize_mobile_number(payload["mobile_number"])
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
+    doctor_db.update_patient_mobile(patient_id, mobile_number)
+    patient = doctor_db.get_patient(patient_id)
+    return jsonify({"success": True, "patient": _patient_response(patient)})
+
+
+@app.route("/doctor/patients/<patient_id>/history", methods=["GET"])
+@role_required("doctor", api=True)
+def get_doctor_patient_history(patient_id):
+    patient = doctor_db.get_patient(patient_id)
+    if not patient:
+        return jsonify({"error": "Patient not found."}), 404
+    visits = doctor_db.get_patient_history(patient_id)
+    for visit in visits:
+        visit["pdf_url"] = url_for(
+            "download_patient_visit_pdf",
+            patient_id=patient_id,
+            visit_id=visit["visit_id"],
+        )
+    return jsonify({
+        "patient": _patient_response(patient),
+        "visits": visits,
+    })
+
+
+@app.route("/doctor/patients/<patient_id>/visits/<visit_id>", methods=["GET"])
+@role_required("doctor", api=True)
+def get_doctor_patient_visit(patient_id, visit_id):
+    visit = doctor_db.get_patient_visit(patient_id, visit_id)
+    if not visit:
+        return jsonify({"error": "Visit not found for this patient."}), 404
+    visit["pdf_url"] = url_for(
+        "download_patient_visit_pdf",
+        patient_id=patient_id,
+        visit_id=visit_id,
+    )
+    return jsonify({"visit": visit})
+
+
+@app.route(
+    "/doctor/patients/<patient_id>/visits/<visit_id>/pdf",
+    methods=["GET"],
+)
+@role_required("doctor")
+def download_patient_visit_pdf(patient_id, visit_id):
+    visit = doctor_db.get_patient_visit(patient_id, visit_id)
+    if not visit:
+        return jsonify({"error": "Visit not found for this patient."}), 404
+    filename = visit["pdf_path"]
+    if not filename or os.path.basename(filename) != filename:
+        return jsonify({"error": "Prescription PDF is unavailable."}), 404
+    return send_from_directory(GENERATED_FOLDER, filename, as_attachment=True)
+
+
+@app.route("/doctor/interactions/analyze", methods=["POST"])
+@role_required("doctor", api=True)
+def analyze_doctor_medicine_interactions():
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({"error": "Interaction data must be provided as an object."}), 400
+    current_medicines = payload.get("current_medicines", [])
+    if (
+        not isinstance(current_medicines, list)
+        or any(not isinstance(name, str) or not name.strip() for name in current_medicines)
+    ):
+        return jsonify({
+            "error": "Confirmed current medicines must be provided as a list of names."
+        }), 400
+    if payload.get("current_medicines_confirmed") is not True:
+        return jsonify({
+            "error": "Confirm that the patient's medication history was reviewed."
+        }), 400
+    current_medicines = [name.strip() for name in current_medicines]
+    new_medicines = _medicine_names_for_analysis(payload)
+    if not new_medicines:
+        return jsonify({"error": "Enter at least one new medicine to analyze."}), 400
+
+    if isinstance(payload.get("medicines"), list):
+        prescription_preview = []
+        for item in payload["medicines"]:
+            if isinstance(item, str):
+                prescription_preview.append({
+                    "name": item.strip(),
+                    "dosage": "",
+                    "frequency": "",
+                    "duration": "",
+                    "instructions": "",
+                })
+            elif isinstance(item, dict):
+                prescription_preview.append({
+                    field: item.get(field, "") if isinstance(item.get(field, ""), str) else ""
+                    for field in ("name", "dosage", "frequency", "duration", "instructions")
+                })
+    else:
+        prescription_text = payload.get("text", "")
+        prescription_preview = parse_prescription(prescription_text)["medicines"]
+
+    result = analyze_medicine_interactions(current_medicines, new_medicines)
+    review_token = secrets.token_urlsafe(32)
+    session["interaction_review"] = {
+        "token_hash": hashlib.sha256(review_token.encode("utf-8")).hexdigest(),
+        "fingerprint": _interaction_fingerprint(
+            current_medicines,
+            new_medicines,
+        ),
+    }
+    return jsonify({
+        "analysis": result,
+        "prescription_preview": prescription_preview,
+        "interaction_review_token": review_token,
+    })
+
 
 @app.route('/process', methods=['POST'])
 def process_image():
@@ -2220,7 +2918,8 @@ def process_image():
                     medicine_info = get_medicine_info_gemini(
                         medicine_ocr,
                         expiry_ocr,
-                        gemini_language
+                        gemini_language,
+                        brand_name=medicine_name or ""
                     )
 
                     if not medicine_info:
@@ -2232,7 +2931,8 @@ def process_image():
                             'expiry_date': expiry_date,
                             'uses': ['Information not available'],
                             'side_effects': ['Information not available'],
-                            'alternatives': ['Information not available'],
+                            'same_ingredient_alternatives': [],
+                            'other_drug_options': [],
                             'source': 'Gemini (error)'
                         }
 
@@ -2248,7 +2948,10 @@ def process_image():
                     dosage_form = medicine_info.get('dosage_form', 'Information not available')
                     uses = medicine_info.get('uses', [])
                     side_effects = medicine_info.get('side_effects', [])
-                    alternatives = medicine_info.get('alternatives', [])
+                    same_ingredient_alternatives = medicine_info.get(
+                        'same_ingredient_alternatives', []
+                    )
+                    other_drug_options = medicine_info.get('other_drug_options', [])
 
                     formatted_uses = []
                     for use in uses:
@@ -2284,12 +2987,18 @@ def process_image():
                             print(f"  {i}. {effect}")
                     else:
                         print("  No side effects information available")
-                    print("\n🔄 ALTERNATIVE MEDICINES:")
-                    if alternatives:
-                        for i, alt in enumerate(alternatives, 1):
-                            print(f"  {i}. {alt}")
+                    print("\n🔄 SAME-INGREDIENT BRAND SUGGESTIONS:")
+                    if same_ingredient_alternatives:
+                        for i, suggestion in enumerate(same_ingredient_alternatives, 1):
+                            print(f"  {i}. {suggestion.get('brand_name', 'Information not available')}")
                     else:
-                        print("  No alternatives information available")
+                        print("  No reliable suggestions available")
+                    print("\n💊 OTHER DRUG OPTIONS A DOCTOR MAY CONSIDER:")
+                    if other_drug_options:
+                        for i, option in enumerate(other_drug_options, 1):
+                            print(f"  {i}. {option.get('medicine_name', 'Information not available')}")
+                    else:
+                        print("  No reliable suggestions available")
                     print("="*80 + "\n")
 
                     results.append({
@@ -2314,7 +3023,9 @@ def process_image():
 
                         'side_effects': formatted_effects,
 
-                        'alternatives': alternatives
+                        'same_ingredient_alternatives': same_ingredient_alternatives,
+
+                        'other_drug_options': other_drug_options
 
                     })
                 else:
@@ -2324,6 +3035,8 @@ def process_image():
                         'brand_name': 'Not detected',
                         'generic_name': 'Information not available',
                         'expiry_date': expiry_date,
+                        'same_ingredient_alternatives': [],
+                        'other_drug_options': [],
                         'error': 'Could not extract medicine information'
                     })
             except Exception as file_error:
@@ -2332,6 +3045,8 @@ def process_image():
                     'filename': filename,
                     'medicine_name': 'Not detected',
                     'expiry_date': 'NOT FOUND',
+                    'same_ingredient_alternatives': [],
+                    'other_drug_options': [],
                     'error': str(file_error)
                 })
 
@@ -2346,13 +3061,17 @@ def process_image():
 # ==================== MEDICINE INVENTORY API ====================
 
 @app.route('/add-medicine', methods=['POST'])
+@role_required("medical_staff", api=True)
 def add_medicine_api():
     data = request.get_json()
 
-    if not data or not data.get('medicine_name') or not data.get('expiry_date'):
-        return jsonify({
-            "error": "medicine_name and expiry_date are required"
-        }), 400
+    if not data or not data.get('medicine_name'):
+        return jsonify({"error": "medicine_name is required"}), 400
+
+    try:
+        expiry_date = normalize_expiry(data.get("expiry_date"))
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
 
     try:
         quantity = int(data.get('quantity', 0))
@@ -2366,7 +3085,7 @@ def add_medicine_api():
             "generic_name": data.get("generic_name"),
             "strength": data.get("strength"),
             "dosage_form": data.get("dosage_form"),
-            "expiry_date": data["expiry_date"],
+            "expiry_date": expiry_date,
             "quantity": quantity,
             "row_number": data.get("row_number"),
             "column_number": data.get("column_number")
@@ -2377,13 +3096,14 @@ def add_medicine_api():
             "medicine_id": medicine_id
         }), 201
 
-    except ValueError:
+    except (TypeError, ValueError):
         return jsonify({"error": "quantity must be a number"}), 400
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 
 @app.route('/medicines', methods=['GET'])
+@role_required("medical_staff", api=True)
 def get_medicines_api():
     try:
         medicines = get_all_medicines()
@@ -2398,6 +3118,7 @@ def get_medicines_api():
 
 
 @app.route('/medicine/<int:medicine_id>', methods=['GET'])
+@role_required("medical_staff", api=True)
 def get_medicine_api(medicine_id):
     try:
         medicine = get_medicine(medicine_id)
@@ -2414,6 +3135,7 @@ def get_medicine_api(medicine_id):
 
 
 @app.route('/search-medicine', methods=['GET'])
+@role_required("medical_staff", api=True)
 def search_medicine_api():
     search_text = request.args.get('q', '').strip()
 
@@ -2435,13 +3157,17 @@ def search_medicine_api():
 
 
 @app.route('/medicine/<int:medicine_id>', methods=['PUT'])
+@role_required("medical_staff", api=True)
 def update_medicine_api(medicine_id):
     data = request.get_json()
 
-    if not data or not data.get('medicine_name') or not data.get('expiry_date'):
-        return jsonify({
-            "error": "medicine_name and expiry_date are required"
-        }), 400
+    if not data or not data.get('medicine_name'):
+        return jsonify({"error": "medicine_name is required"}), 400
+
+    try:
+        expiry_date = normalize_expiry(data.get("expiry_date"))
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
 
     try:
         quantity = int(data.get('quantity', 0))
@@ -2455,7 +3181,7 @@ def update_medicine_api(medicine_id):
             "generic_name": data.get("generic_name"),
             "strength": data.get("strength"),
             "dosage_form": data.get("dosage_form"),
-            "expiry_date": data["expiry_date"],
+            "expiry_date": expiry_date,
             "quantity": quantity,
             "row_number": data.get("row_number"),
             "column_number": data.get("column_number")
@@ -2470,13 +3196,14 @@ def update_medicine_api(medicine_id):
             "message": "Medicine updated successfully"
         }), 200
 
-    except ValueError:
+    except (TypeError, ValueError):
         return jsonify({"error": "quantity must be a number"}), 400
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 
 @app.route('/medicine/<int:medicine_id>/quantity', methods=['PUT'])
+@role_required("medical_staff", api=True)
 def update_medicine_quantity_api(medicine_id):
     data = request.get_json()
 
@@ -2514,6 +3241,7 @@ def update_medicine_quantity_api(medicine_id):
 
 
 @app.route('/medicine/<int:medicine_id>', methods=['DELETE'])
+@role_required("medical_staff", api=True)
 def delete_medicine_api(medicine_id):
     try:
         deleted = delete_medicine(medicine_id)
@@ -2532,6 +3260,7 @@ def delete_medicine_api(medicine_id):
         # ==================== INVENTORY ALERT API ====================
 
 @app.route('/medicines/expiring', methods=['GET'])
+@role_required("medical_staff", api=True)
 def expiring_medicines_api():
     try:
         days = int(request.args.get('days', 30))
@@ -2559,6 +3288,7 @@ def expiring_medicines_api():
 
 
 @app.route('/medicines/expired', methods=['GET'])
+@role_required("medical_staff", api=True)
 def expired_medicines_api():
     try:
         medicines = get_expired_medicines()
@@ -2573,6 +3303,7 @@ def expired_medicines_api():
 
 
 @app.route('/medicines/low-stock', methods=['GET'])
+@role_required("medical_staff", api=True)
 def low_stock_medicines_api():
     try:
         threshold = int(request.args.get('threshold', 10))
@@ -2600,6 +3331,7 @@ def low_stock_medicines_api():
 # ==================== MEDICINE LOCATION API ====================
 
 @app.route('/medicine/<int:medicine_id>/location', methods=['GET'])
+@role_required("medical_staff", api=True)
 def medicine_location_api(medicine_id):
     try:
         medicine = get_medicine(medicine_id)

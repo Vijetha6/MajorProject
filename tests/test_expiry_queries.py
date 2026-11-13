@@ -1,5 +1,5 @@
 import sqlite3
-from datetime import date, timedelta
+from datetime import date
 
 import database
 
@@ -24,9 +24,8 @@ def test_expiry_filters_for_today_and_future(tmp_path, monkeypatch):
         """
     )
 
-    today = date.today().isoformat()
-    tomorrow = (date.today() + timedelta(days=1)).isoformat()
-    in_10_days = (date.today() + timedelta(days=10)).isoformat()
+    today = date(2027, 8, 1)
+    monkeypatch.setattr(database, "_india_today", lambda: today)
 
     conn.executemany(
         """
@@ -36,9 +35,10 @@ def test_expiry_filters_for_today_and_future(tmp_path, monkeypatch):
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         [
-            ("Expired today", "Brand A", "Generic A", "10mg", "Tablet", today, 5, 1, 1),
-            ("Expiring soon", "Brand B", "Generic B", "20mg", "Capsule", tomorrow, 3, 1, 2),
-            ("Later expiry", "Brand C", "Generic C", "30mg", "Syrup", in_10_days, 4, 1, 3),
+            ("Expired yesterday", "Brand A", "Generic A", "10mg", "Tablet", "2027-07-31", 5, 1, 1),
+            ("Expires today", "Brand B", "Generic B", "20mg", "Capsule", "2027-08-01", 3, 1, 2),
+            ("Expires in 30 days", "Brand C", "Generic C", "30mg", "Syrup", "2027-08-31", 4, 1, 3),
+            ("Expires in 31 days", "Brand D", "Generic D", "40mg", "Tablet", "2027-09-01", 20, 1, 4),
         ],
     )
     conn.commit()
@@ -48,6 +48,19 @@ def test_expiry_filters_for_today_and_future(tmp_path, monkeypatch):
 
     expired = [item["medicine_name"] for item in database.get_expired_medicines()]
     expiring = [item["medicine_name"] for item in database.get_expiring_medicines(30)]
+    expiring_today = [
+        item["medicine_name"] for item in database.get_expiring_medicines(0)
+    ]
+    low_stock = [
+        item["medicine_name"]
+        for item in database.get_low_stock_medicines(threshold=10)
+    ]
 
-    assert expired == ["Expired today"]
-    assert expiring == ["Expiring soon", "Later expiry"]
+    assert expired == ["Expired yesterday"]
+    assert expiring == ["Expires today", "Expires in 30 days"]
+    assert expiring_today == ["Expires today"]
+    assert low_stock == [
+        "Expires today",
+        "Expires in 30 days",
+        "Expired yesterday",
+    ]
