@@ -289,12 +289,12 @@
             <p id="prescriptionPatientSummary" class="patient-summary"></p>
 
             <section class="prescription-entry-panel" aria-labelledby="prescriptionEntryTitle">
-              <h3 id="prescriptionEntryTitle">Voice-to-text prescription</h3>
-              <p class="hint">Record the doctor's instructions, then review the recognized text before saving.</p>
+              <h3 id="prescriptionEntryTitle">Prescription entry</h3>
+              <p class="hint">Type the doctor's instructions or record them, then review the text before saving.</p>
               <button id="recordSpeechBtn" type="button" class="record-btn">Record Prescription</button>
               <p id="speechStatus" class="hint" aria-live="polite"></p>
-              <label for="prescriptionText">Recognized prescription text (review before saving)</label>
-              <textarea id="prescriptionText" readonly placeholder="Your recognized prescription will appear here."></textarea>
+              <label for="prescriptionText">Prescription text (review before saving)</label>
+              <textarea id="prescriptionText" placeholder="Type a medicine, dosage, and instructions, or use Record Prescription."></textarea>
             </section>
             <div class="generator-actions">
               <button id="generateBtn" type="button" class="generate-btn" disabled>Save visit and generate PDF</button>
