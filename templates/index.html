@@ -40,8 +40,9 @@
           <button class="nav-item" type="button" data-section="inventorySection">Medical Staff Dashboard</button>
           <button class="nav-item" type="button" data-section="scanSection">Scan Medicine</button>
           <button class="nav-item" type="button" data-section="inventorySection">Inventory</button>
-          <button class="nav-item" type="button" data-section="addMedicineSection">Add Medicine</button>
+          <button class="nav-item" type="button" data-section="inventorySalesSection">Medicine Inventory &amp; Sales</button>
           <button class="nav-item" type="button" data-section="alertsSection">Expiry Alerts</button>
+          <button class="nav-item" type="button" data-section="salesHistorySection">Sales History</button>
           {% endif %}
         </nav>
         <div class="sidebar-footer">
@@ -154,7 +155,7 @@
 
         {% if user_role == 'medical_staff' %}
         <section id="inventorySection" class="page-section{% if initial_section == 'inventorySection' %} active-section{% endif %}" aria-labelledby="inventoryTitle">
-          <div class="staff-tabs"><button class="staff-tab active" type="button" data-section-target="inventorySection">Update Medicine</button><button class="staff-tab" type="button" data-section-target="addMedicineSection">Search Location</button><button class="staff-tab" type="button" data-section-target="alertsSection">Expiry Monitor</button></div>
+          <div class="staff-tabs"><button class="staff-tab active" type="button" data-section-target="inventorySection">Update Medicine</button><button class="staff-tab" type="button" data-section-target="inventorySalesSection">Medicine Inventory &amp; Sales</button><button class="staff-tab" type="button" data-section-target="alertsSection">Expiry Monitor</button><button class="staff-tab" type="button" data-section-target="salesHistorySection">Sales History</button></div>
           <button class="back-button" type="button" data-section-target="dashboardSection">Back to home</button>
           <h2 id="inventoryTitle">Update Medicine</h2>
           <p class="staff-help">Scan the medicine first. Verify the extracted details, then enter its quantity and storage location.</p>
@@ -189,14 +190,15 @@
               <div class="table-actions"><button id="inventoryRefreshBtn" class="secondary-button" type="button">Refresh</button></div>
             </div>
             <div class="table-wrapper">
-              <table id="inventoryTable"><thead><tr><th>ID</th><th>Medicine Name</th><th>Strength</th><th>Expiry Date</th><th>Row</th><th>Column</th></tr></thead><tbody id="inventoryTableBody"><tr><td colspan="6" class="table-empty">Stock records will appear here.</td></tr></tbody></table>
+              <table id="inventoryTable"><thead><tr><th>ID</th><th>Medicine Name</th><th>Strength</th><th>Expiry Date</th><th>Quantity</th><th>Row</th><th>Column</th></tr></thead><tbody id="inventoryTableBody"><tr><td colspan="7" class="table-empty">Stock records will appear here.</td></tr></tbody></table>
             </div>
           </article>
         </section>
 
-        <section id="addMedicineSection" class="page-section" aria-labelledby="addMedicineTitle">
-          <div class="staff-tabs"><button class="staff-tab" type="button" data-section-target="inventorySection">Update Medicine</button><button class="staff-tab active" type="button" data-section-target="addMedicineSection">Search Location</button><button class="staff-tab" type="button" data-section-target="alertsSection">Expiry Monitor</button></div>
+        <section id="inventorySalesSection" class="page-section" aria-labelledby="inventorySalesTitle">
           <button class="back-button" type="button" data-section-target="dashboardSection">Back to home</button>
+          <div class="section-heading"><div><p class="eyebrow">Medical staff workspace</p><h1 id="inventorySalesTitle">Medicine Inventory &amp; Sales</h1><p class="section-description">Find a medicine's storage location and record medicine sales from one page.</p></div></div>
+        <div id="addMedicineSection" class="inventory-sales-panel" aria-labelledby="addMedicineTitle">
           <h2 id="addMedicineTitle">Search Location</h2>
           <p class="staff-help">Type a medicine name, or scan a medicine image, to find its stored row and column/rack.</p>
 <div class="staff-scan-row staff-text-search">
@@ -211,10 +213,34 @@
           </div>
           <p id="staffLocationStatus" class="staff-status" aria-live="polite"></p>
           <div id="staffLocationResult" class="staff-location-result" hidden></div>
+        </div>
+
+
+
+        <div id="sellMedicineSection" class="inventory-sales-panel" aria-labelledby="sellMedicineTitle">
+          <h2 id="sellMedicineTitle">Sell Medicine</h2>
+          <p class="staff-help">Choose a medicine batch, check the available stock, then enter the quantity sold. Expired batches cannot be sold.</p>
+          <article class="content-card form-card staff-update-form-card">
+            <form id="sellMedicineForm" novalidate>
+              <div class="form-grid sell-form-grid">
+                <label>Medicine batch<select id="sellMedicineSelect" required><option value="">Loading medicines...</option></select></label>
+                <label>Quantity sold<input id="sellQuantityInput" name="quantity" type="number" min="1" step="1" inputmode="numeric" placeholder="e.g. 5" required></label>
+              </div>
+              <div id="sellStockDetails" class="sell-stock-details" hidden aria-live="polite">
+                <div><span>Medicine</span><strong id="sellDetailName">--</strong></div>
+                <div><span>Strength</span><strong id="sellDetailStrength">--</strong></div>
+                <div><span>Expiry date</span><strong id="sellDetailExpiry">--</strong></div>
+                <div><span>Available stock</span><strong id="sellDetailQuantity">--</strong></div>
+              </div>
+              <p id="sellStatus" class="staff-status sell-status" role="status" aria-live="polite"></p>
+              <button id="sellSubmitBtn" class="primary-button" type="submit">Complete Sale</button>
+            </form>
+          </article>
+        </div>
         </section>
 
         <section id="alertsSection" class="page-section" aria-labelledby="alertsTitle">
-          <div class="staff-tabs"><button class="staff-tab" type="button" data-section-target="inventorySection">Update Medicine</button><button class="staff-tab" type="button" data-section-target="addMedicineSection">Search Location</button><button class="staff-tab active" type="button" data-section-target="alertsSection">Expiry Monitor</button></div>
+          <div class="staff-tabs"><button class="staff-tab" type="button" data-section-target="inventorySection">Update Medicine</button><button class="staff-tab" type="button" data-section-target="inventorySalesSection">Medicine Inventory &amp; Sales</button><button class="staff-tab active" type="button" data-section-target="alertsSection">Expiry Monitor</button><button class="staff-tab" type="button" data-section-target="salesHistorySection">Sales History</button></div>
           <button class="back-button" type="button" data-section-target="dashboardSection">Back to home</button>
           <div class="section-heading"><div><p class="eyebrow">Safety monitoring</p><h1 id="alertsTitle">Expiry alerts</h1><p class="section-description">Review medicines that need attention before they become unsafe to use.</p></div></div>
           <div class="alert-grid">
@@ -222,6 +248,20 @@
             <article class="content-card alert-card alert-card-danger"><div class="card-heading"><h2>Expired medicines</h2><span class="alert-count" id="expiredCount">--</span></div><div id="expiredList" class="alert-list"><div class="empty-state">Expired medicines will appear here.</div></div></article>
           </div>
           <article class="content-card low-stock-monitor"><h2>Low-stock medicines</h2><div id="staffLowStockList" class="alert-list">Loading...</div></article>
+        </section>
+
+        <section id="salesHistorySection" class="page-section" aria-labelledby="salesHistoryTitle">
+          <div class="staff-tabs"><button class="staff-tab" type="button" data-section-target="inventorySection">Update Medicine</button><button class="staff-tab" type="button" data-section-target="inventorySalesSection">Medicine Inventory &amp; Sales</button><button class="staff-tab" type="button" data-section-target="alertsSection">Expiry Monitor</button><button class="staff-tab active" type="button" data-section-target="salesHistorySection">Sales History</button></div>
+          <button class="back-button" type="button" data-section-target="dashboardSection">Back to home</button>
+          <article class="content-card table-card">
+            <div class="table-toolbar">
+              <div><h2 id="salesHistoryTitle">Sales History</h2><p class="table-note">Most recent sales appear first. Times are shown in Indian Standard Time.</p></div>
+              <div class="table-actions"><button id="salesHistoryRefreshBtn" class="secondary-button" type="button">Refresh</button></div>
+            </div>
+            <div class="table-wrapper">
+              <table id="salesHistoryTable"><thead><tr><th>Medicine Name</th><th>Quantity Sold</th><th>Date</th><th>Time</th></tr></thead><tbody id="salesHistoryTableBody"><tr><td colspan="4" class="table-empty">Sales records will appear here.</td></tr></tbody></table>
+            </div>
+          </article>
         </section>
         {% endif %}
 

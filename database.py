@@ -1,6 +1,7 @@
 import calendar
 import re
 import sqlite3
+import uuid
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
@@ -100,6 +101,22 @@ def init_database():
             quantity INTEGER DEFAULT 0,
             row_number INTEGER,
             column_number INTEGER
+        )
+    """)
+
+    # Sales history. No foreign key on purpose: history must survive even if a
+    # medicine record is later deleted, so the name/strength/expiry are copied in.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS sales (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            medicine_id INTEGER NOT NULL,
+            medicine_name TEXT NOT NULL,
+            strength TEXT,
+            expiry_date TEXT,
+            quantity_sold INTEGER NOT NULL CHECK (quantity_sold > 0),
+            sold_at TEXT NOT NULL,
+            sold_by TEXT,
+            request_id TEXT NOT NULL UNIQUE
         )
     """)
 
@@ -341,6 +358,150 @@ def get_low_stock_medicines(threshold=10):
     conn.close()
 
     return [dict(medicine) for medicine in medicines]
+
+
+# ==================== SELL MEDICINE ====================
+
+class SaleError(Exception):
+    """A sale was refused. `status` is the suggested HTTP status code."""
+
+    def __init__(self, message, status=400):
+        super().__init__(message)
+        self.message = message
+        self.status = status
+
+
+def _validate_sale_quantity(quantity):
+    """Accept only whole numbers of at least 1 (int, or digits-only text)."""
+    if isinstance(quantity, bool):
+        raise SaleError("Quantity must be a whole number.")
+    if isinstance(quantity, str) and re.fullmatch(r"\s*\d+\s*", quantity):
+        quantity = int(quantity)
+    if not isinstance(quantity, int):
+        raise SaleError("Quantity must be a whole number.")
+    if quantity < 1:
+        raise SaleError("Quantity must be at least 1.")
+    return quantity
+
+
+def _sale_result(sale_row, remaining_stock, duplicate=False):
+    return {
+        "sale_id": sale_row["id"],
+        "medicine_id": sale_row["medicine_id"],
+        "medicine_name": sale_row["medicine_name"],
+        "strength": sale_row["strength"],
+        "expiry_date": sale_row["expiry_date"],
+        "quantity_sold": sale_row["quantity_sold"],
+        "sold_at": sale_row["sold_at"],
+        "remaining_stock": remaining_stock,
+        "duplicate": duplicate,
+    }
+
+
+def sell_medicine(medicine_id, quantity, sold_by=None, request_id=None):
+    """Sell `quantity` units from ONE medicine batch (one row in `medicines`).
+
+    All steps happen in a single transaction, so either everything is saved
+    (stock reduced AND sale recorded) or nothing is.
+
+    Returns a dict with the sale details and the remaining stock.
+    Raises SaleError if the sale is refused.
+    """
+    quantity = _validate_sale_quantity(quantity)
+    if isinstance(medicine_id, bool) or not isinstance(medicine_id, int):
+        raise SaleError("A valid medicine must be selected.")
+    request_id = str(request_id or uuid.uuid4())
+
+    # isolation_level=None lets us control the transaction ourselves.
+    conn = sqlite3.connect(DATABASE, timeout=10, isolation_level=None)
+    conn.row_factory = sqlite3.Row
+    try:
+        # BEGIN IMMEDIATE takes the write lock now, so two people selling the
+        # same batch at the same moment cannot both read the same old stock.
+        conn.execute("BEGIN IMMEDIATE")
+
+        # Same request sent twice (double click / retry): do not sell again.
+        previous = conn.execute(
+            "SELECT * FROM sales WHERE request_id = ?", (request_id,)
+        ).fetchone()
+        if previous:
+            medicine = conn.execute(
+                "SELECT quantity FROM medicines WHERE id = ?",
+                (previous["medicine_id"],),
+            ).fetchone()
+            conn.execute("ROLLBACK")
+            remaining = (medicine["quantity"] or 0) if medicine else 0
+            return _sale_result(previous, remaining, duplicate=True)
+
+        medicine = conn.execute(
+            "SELECT * FROM medicines WHERE id = ?", (medicine_id,)
+        ).fetchone()
+        if medicine is None:
+            raise SaleError("Medicine not found.", 404)
+
+        # Block expired batches (a batch is still sellable on its expiry day,
+        # matching the existing expiry-alert rules).
+        try:
+            expiry = date.fromisoformat(normalize_expiry(medicine["expiry_date"]))
+        except ValueError:
+            raise SaleError(
+                "This batch has an unreadable expiry date, so it cannot be sold. "
+                "Please correct the batch details first.", 409)
+        if expiry < _india_today():
+            raise SaleError(
+                f"{medicine['medicine_name']} (expiry {expiry.isoformat()}) has "
+                "expired and cannot be sold.", 409)
+
+        # The WHERE quantity >= ? makes it impossible for stock to go negative.
+        updated = conn.execute(
+            "UPDATE medicines SET quantity = quantity - ? "
+            "WHERE id = ? AND COALESCE(quantity, 0) >= ?",
+            (quantity, medicine_id, quantity),
+        )
+        if updated.rowcount != 1:
+            available = medicine["quantity"] or 0
+            raise SaleError(
+                f"Insufficient stock. Available: {available}, requested: {quantity}.",
+                409)
+
+        sold_at = datetime.now(INDIA_TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")
+        cursor = conn.execute(
+            "INSERT INTO sales (medicine_id, medicine_name, strength, expiry_date, "
+            "quantity_sold, sold_at, sold_by, request_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (medicine_id, medicine["medicine_name"], medicine["strength"],
+             medicine["expiry_date"], quantity, sold_at, sold_by, request_id),
+        )
+        remaining = conn.execute(
+            "SELECT quantity FROM medicines WHERE id = ?", (medicine_id,)
+        ).fetchone()["quantity"]
+        sale_row = conn.execute(
+            "SELECT * FROM sales WHERE id = ?", (cursor.lastrowid,)
+        ).fetchone()
+        conn.execute("COMMIT")
+        return _sale_result(sale_row, remaining)
+    except BaseException:
+        # Any failure (including a failed sales insert) undoes the stock change.
+        if conn.in_transaction:
+            conn.execute("ROLLBACK")
+        raise
+    finally:
+        conn.close()
+
+
+# ==================== SALES HISTORY ====================
+
+def get_sales_history(limit=200):
+    """Return recent sales, newest first."""
+    if not isinstance(limit, int) or isinstance(limit, bool) or limit < 1:
+        raise ValueError("limit must be a positive integer.")
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT id, medicine_id, medicine_name, strength, expiry_date, "
+        "quantity_sold, sold_at, sold_by FROM sales ORDER BY id DESC LIMIT ?",
+        (limit,),
+    ).fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
 
 
 # ==================== INITIALIZE DATABASE ====================

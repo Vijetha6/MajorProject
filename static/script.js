@@ -873,6 +873,10 @@ if (document.documentElement.dataset.navigationInitialized !== 'true') {
       loadInventory().catch(error => console.error('Could not load inventory:', error));
     } else if (sectionId === 'alertsSection') {
       loadStaffAlerts().catch(error => console.error('Could not load expiry alerts:', error));
+    } else if (sectionId === 'inventorySalesSection') {
+      loadSellMedicines().catch(error => console.error('Could not load medicines for sale:', error));
+    } else if (sectionId === 'salesHistorySection') {
+      loadSalesHistory().catch(error => console.error('Could not load sales history:', error));
     }
   });
 }
@@ -1142,8 +1146,8 @@ async function saveStaffMedicine(event) {
 function renderInventory(medicines) {
   inventoryTableBody.innerHTML = medicines.length ? medicines.map((medicine, index) => {
     const expiry = expiryPresentation(medicine.expiry_date);
-    return `<tr><td>${index + 1}</td><td>${escapeHtml(medicine.medicine_name)}</td><td>${escapeHtml(medicine.strength || '')}</td><td><span>${escapeHtml(expiry.display)}</span>${expiry.status ? `<span class="expiry-status expiry-status-${expiry.status}">${escapeHtml(expiry.label)}</span>` : ''}</td><td>${escapeHtml(medicine.row_number ?? '')}</td><td>${escapeHtml(medicine.column_number ?? '')}</td></tr>`;
-  }).join('') : '<tr><td colspan="6" class="table-empty">No medicines in stock.</td></tr>';
+    return `<tr><td>${index + 1}</td><td>${escapeHtml(medicine.medicine_name)}</td><td>${escapeHtml(medicine.strength || '')}</td><td><span>${escapeHtml(expiry.display)}</span>${expiry.status ? `<span class="expiry-status expiry-status-${expiry.status}">${escapeHtml(expiry.label)}</span>` : ''}</td><td>${escapeHtml(medicine.quantity ?? 0)}</td><td>${escapeHtml(medicine.row_number ?? '')}</td><td>${escapeHtml(medicine.column_number ?? '')}</td></tr>`;
+  }).join('') : '<tr><td colspan="7" class="table-empty">No medicines in stock.</td></tr>';
 }
 
 async function loadInventory() {
@@ -1285,3 +1289,182 @@ if (editExtractedFieldsBtn) editExtractedFieldsBtn.addEventListener('click', () 
   staffUpdateStatus.textContent = 'Edit the extracted details, then save the medicine.';
 });
 if (inventoryRefreshBtn) inventoryRefreshBtn.addEventListener('click', loadInventory);
+
+// ==================== SELL MEDICINE & SALES HISTORY ====================
+const sellMedicineForm = document.getElementById('sellMedicineForm');
+const sellMedicineSelect = document.getElementById('sellMedicineSelect');
+const sellQuantityInput = document.getElementById('sellQuantityInput');
+const sellStockDetails = document.getElementById('sellStockDetails');
+const sellStatus = document.getElementById('sellStatus');
+const sellSubmitBtn = document.getElementById('sellSubmitBtn');
+const salesHistoryTableBody = document.getElementById('salesHistoryTableBody');
+const salesHistoryRefreshBtn = document.getElementById('salesHistoryRefreshBtn');
+let sellMedicines = [];     // every batch (row) currently in inventory
+let sellRequestId = null;   // one id per sale attempt; stops a double click selling twice
+let sellInFlight = false;
+
+function setSellStatus(message, kind = '') {
+  sellStatus.textContent = message;
+  sellStatus.classList.toggle('is-error', kind === 'error');
+  sellStatus.classList.toggle('is-success', kind === 'success');
+}
+
+function isMedicineSellable(medicine) {
+  return expiryPresentation(medicine.expiry_date).status !== 'expired' && Number(medicine.quantity) > 0;
+}
+
+function sellBatchLabel(medicine) {
+  const expiry = expiryPresentation(medicine.expiry_date);
+  const parts = [medicine.medicine_name];
+  if (medicine.strength) parts.push(medicine.strength);
+  parts.push(`Exp ${expiry.display}`, `Qty ${medicine.quantity ?? 0}`);
+  let label = parts.join(' · ');
+  if (expiry.status === 'expired') label += ' (EXPIRED - cannot sell)';
+  else if (!(Number(medicine.quantity) > 0)) label += ' (out of stock)';
+  return label;
+}
+
+function selectedSellMedicine() {
+  const id = Number(sellMedicineSelect.value);
+  return sellMedicines.find(medicine => medicine.id === id) || null;
+}
+
+function renderSellOptions(selectedId = '') {
+  sellMedicineSelect.innerHTML = '';
+  const placeholder = document.createElement('option');
+  placeholder.value = '';
+  placeholder.textContent = sellMedicines.length ? 'Select a medicine' : 'No medicines in stock';
+  sellMedicineSelect.appendChild(placeholder);
+  sellMedicines.forEach(medicine => {
+    const option = document.createElement('option');
+    option.value = String(medicine.id);
+    option.textContent = sellBatchLabel(medicine);
+    option.disabled = !isMedicineSellable(medicine);
+    sellMedicineSelect.appendChild(option);
+  });
+  const stillThere = sellMedicines.some(medicine => String(medicine.id) === String(selectedId) && isMedicineSellable(medicine));
+  sellMedicineSelect.value = stillThere ? String(selectedId) : '';
+}
+
+function showSellDetails() {
+  const medicine = selectedSellMedicine();
+  sellStockDetails.hidden = !medicine;
+  if (!medicine) return;
+  const expiry = expiryPresentation(medicine.expiry_date);
+  document.getElementById('sellDetailName').textContent = medicine.medicine_name;
+  document.getElementById('sellDetailStrength').textContent = medicine.strength || 'Not specified';
+  document.getElementById('sellDetailExpiry').textContent = expiry.label ? `${expiry.display} (${expiry.label})` : expiry.display;
+  document.getElementById('sellDetailQuantity').textContent = String(medicine.quantity ?? 0);
+  sellQuantityInput.max = String(medicine.quantity ?? 0);
+}
+
+async function loadSellMedicines() {
+  const response = await fetch('/medicines');
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || 'Could not load medicines.');
+  sellMedicines = data.medicines || [];
+  renderSellOptions(sellMedicineSelect.value);
+  showSellDetails();
+}
+
+function newSaleRequestId() {
+  if (window.crypto && typeof window.crypto.randomUUID === 'function') return window.crypto.randomUUID();
+  return `sale-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
+}
+
+async function submitSale(event) {
+  event.preventDefault();
+  if (sellInFlight) return;
+
+  const medicine = selectedSellMedicine();
+  if (!medicine) return setSellStatus('Please select a medicine batch first.', 'error');
+  if (expiryPresentation(medicine.expiry_date).status === 'expired') {
+    return setSellStatus('This batch has expired and cannot be sold.', 'error');
+  }
+
+  const rawQuantity = sellQuantityInput.value.trim();
+  if (!/^\d+$/.test(rawQuantity) || Number(rawQuantity) < 1) {
+    return setSellStatus('Enter the quantity sold as a whole number of at least 1.', 'error');
+  }
+  const quantity = Number(rawQuantity);
+  const available = Number(medicine.quantity) || 0;
+  if (quantity > available) {
+    return setSellStatus(`Insufficient stock. Available: ${available}, requested: ${quantity}.`, 'error');
+  }
+
+  sellInFlight = true;
+  sellSubmitBtn.disabled = true;
+  setSellStatus('Completing sale...');
+  if (!sellRequestId) sellRequestId = newSaleRequestId();
+  let serverResponded = false;
+  try {
+    const response = await fetch('/sales', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ medicine_id: medicine.id, quantity, request_id: sellRequestId })
+    });
+    serverResponded = true;
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'The sale could not be completed.');
+
+    sellRequestId = null;
+    // Show the new quantity straight away, then confirm it from the database.
+    medicine.quantity = data.remaining_stock;
+    renderSellOptions(String(medicine.id));
+    showSellDetails();
+    sellQuantityInput.value = '';
+    setSellStatus(data.message, 'success');
+    loadSellMedicines().catch(error => console.error('Could not refresh stock:', error));
+    loadInventory().catch(error => console.error('Could not refresh inventory:', error));
+    loadSalesHistory().catch(error => console.error('Could not refresh sales history:', error));
+  } catch (error) {
+    if (serverResponded) sellRequestId = null; // the server refused it, so a retry is a new sale
+    setSellStatus(error instanceof TypeError ? 'Could not reach the server. Check your connection and try again.' : error.message, 'error');
+    if (serverResponded) loadSellMedicines().catch(() => {});
+  } finally {
+    sellInFlight = false;
+    sellSubmitBtn.disabled = false;
+  }
+}
+
+function formatSaleDateTime(soldAt) {
+  const [datePart = '', timePart = ''] = String(soldAt || '').split(' ');
+  const [year, month, day] = datePart.split('-');
+  const [hours, minutes] = timePart.split(':').map(Number);
+  if (!year || !month || !day || Number.isNaN(hours)) return { date: String(soldAt || ''), time: '' };
+  const suffix = hours >= 12 ? 'PM' : 'AM';
+  const hour12 = hours % 12 || 12;
+  return {
+    date: `${day}/${month}/${year}`,
+    time: `${String(hour12).padStart(2, '0')}:${String(minutes).padStart(2, '0')} ${suffix}`
+  };
+}
+
+function renderSalesHistory(sales) {
+  salesHistoryTableBody.innerHTML = sales.length ? sales.map(sale => {
+    const when = formatSaleDateTime(sale.sold_at);
+    const strength = sale.strength ? `<small>${escapeHtml(sale.strength)}</small>` : '';
+    return `<tr><td>${escapeHtml(sale.medicine_name)}${strength}</td><td>${escapeHtml(sale.quantity_sold)}</td><td>${escapeHtml(when.date)}</td><td>${escapeHtml(when.time)}</td></tr>`;
+  }).join('') : '<tr><td colspan="4" class="table-empty">No sales recorded yet.</td></tr>';
+}
+
+async function loadSalesHistory() {
+  const response = await fetch('/sales');
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || 'Could not load sales history.');
+  renderSalesHistory(data.sales || []);
+}
+
+if (sellMedicineForm) sellMedicineForm.addEventListener('submit', submitSale);
+if (sellMedicineSelect) sellMedicineSelect.addEventListener('change', () => {
+  sellRequestId = null;
+  setSellStatus('');
+  showSellDetails();
+});
+if (sellQuantityInput) sellQuantityInput.addEventListener('input', () => {
+  sellRequestId = null;
+  if (sellStatus.classList.contains('is-error')) setSellStatus('');
+});
+if (salesHistoryRefreshBtn) salesHistoryRefreshBtn.addEventListener('click', () => {
+  loadSalesHistory().catch(error => console.error('Could not load sales history:', error));
+});

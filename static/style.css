@@ -1066,7 +1066,6 @@ body {
 .legacy-tab-control,
 .prescription-section,
 #inventorySection,
-#addMedicineSection,
 #alertsSection,
 #lowStockSection {
   display: none;
@@ -1401,6 +1400,7 @@ main > #tabGenerator,
 #dashboardSection.active-section,
 #scanSection.active-section,
 #inventorySection.active-section,
+#inventorySalesSection.active-section,
 #addMedicineSection.active-section,
 #alertsSection.active-section,
 #lowStockSection.active-section,
@@ -1559,6 +1559,7 @@ main > #tabGenerator,
 #scanSection.active-section,
 #generatorTab.active-section,
 #inventorySection.active-section,
+#inventorySalesSection.active-section,
 #addMedicineSection.active-section,
 #alertsSection.active-section,
 #lowStockSection.active-section {
@@ -1917,3 +1918,46 @@ html[data-user-role="public"] .role-button {
     padding-left: 16px;
   }
 }
+
+/* ==================== Medicine Inventory & Sales ==================== */
+/* The combined inventory and sales page contains both functional panels. */
+#inventorySalesSection.active-section { display: block !important; }
+.inventory-sales-panel { display: block; margin: 18px 0 26px; }
+.inventory-sales-panel + .inventory-sales-panel { padding-top: 22px; border-top: 1px solid #e2e8f0; }
+#salesHistorySection.active-section { display: block !important; }
+/* The staff tab bar is narrow; with five tabs let them wrap instead of hiding behind the Log out button. */
+.staff-tabs { flex-wrap: wrap; overflow-x: visible; }
+.sell-form-grid { grid-template-columns: 1fr; margin-bottom: 16px; }
+.sell-form-grid select { width: 100%; padding: 11px; }
+.sell-stock-details {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin: 0 0 14px;
+  padding: 14px;
+  border: 1px solid #bae6fd;
+  border-radius: 6px;
+  background: #f0f9ff;
+  color: #164e63;
+  font-size: 12px;
+  text-align: left;
+}
+.sell-stock-details[hidden] { display: none; }
+.sell-stock-details span {
+  display: block;
+  margin-bottom: 4px;
+  color: #0f766e;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.sell-stock-details strong { overflow-wrap: anywhere; }
+#sellDetailQuantity { font-size: 18px; color: var(--blue); }
+.sell-status.is-success { color: #176b3a; font-size: 12px; font-weight: 700; }
+.sell-status.is-error { color: var(--red); font-size: 12px; font-weight: 700; }
+#sellSubmitBtn:disabled { opacity: 0.6; cursor: not-allowed; }
+/* Compact so all four columns (including Time) fit the narrow card without sideways scrolling. */
+#salesHistoryTable th,
+#salesHistoryTable td { padding: 10px 6px; white-space: normal; }
+#salesHistoryTable td small { display: block; color: #64748b; }
