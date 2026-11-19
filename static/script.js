@@ -785,17 +785,23 @@ async function generatePrescription() {
       ? `<a href="${escapeHtml(data.drive_url)}" target="_blank" rel="noopener" class="rx-download-link rx-drive-link">View on Google Drive</a>`
       : '';
     
-    // Prepare WhatsApp button
-    const whatsappButton = data.phone_number 
-      ? `<button id="sendWhatsAppBtn" class="rx-whatsapp-btn" type="button" data-patient-name="${escapeHtml(data.patient)}" data-phone="${escapeHtml(data.phone_number)}" data-visit-id="${escapeHtml(data.visit_id)}">Send Prescription via WhatsApp</button>`
+    // Prepare WhatsApp status message (automatic sending via Twilio)
+    const whatsappStatus = data.phone_number 
+      ? `<div class="rx-whatsapp-status">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none" style="vertical-align: middle; margin-right: 8px;">
+            <path d="M10 0C4.477 0 0 4.477 0 10c0 1.89.525 3.66 1.438 5.168L.546 18.2a.75.75 0 00.954.954l3.032-.892A9.96 9.96 0 0010 20c5.523 0 10-4.477 10-10S15.523 0 10 0zm0 18a7.96 7.96 0 01-4.055-1.098l-2.293.674.674-2.293A7.96 7.96 0 012 10c0-4.411 3.589-8 8-8s8 3.589 8 8-3.589 8-8 8z" fill="#25D366"/>
+            <path d="M14.5 13.5l-1.4-1.4c-.2-.2-.5-.2-.7 0l-.8.8c-.1.1-.3.1-.4 0l-2.4-2.4c-.1-.1-.1-.3 0-.4l.8-.8c.2-.2.2-.5 0-.7l-1.4-1.4c-.2-.2-.5-.2-.7 0L6 8.7c-.3.3-.3.8 0 1.1l4.2 4.2c.3.3.8.3 1.1 0l1.5-1.5c.2-.2.2-.5 0-.7z" fill="#25D366"/>
+          </svg>
+          <strong style="color: #25D366;">WhatsApp Sent Automatically!</strong>
+          <p style="margin: 5px 0 0 28px; font-size: 13px; color: #666;">Prescription PDF has been automatically sent to ${escapeHtml(data.phone_number)} via WhatsApp.</p>
+        </div>`
       : '';
     
-    console.log('[WhatsApp Debug] Button HTML created:', whatsappButton ? 'YES' : 'NO');
-    console.log('[WhatsApp Debug] Button HTML length:', whatsappButton.length);
+    console.log('[WhatsApp Debug] Status message created:', whatsappStatus ? 'YES' : 'NO');
     
     generatorOutput.innerHTML = `
       <div class="medicine-card">
-        <h3>Visit saved and prescription generated</h3>
+        <h3>✅ Visit saved and prescription generated</h3>
         <p><b>Patient:</b> ${escapeHtml(data.patient)} · ${escapeHtml(data.patient_id)}</p>
         <p><b>Visit ID:</b> ${escapeHtml(data.visit_id)}</p>
         <p><b>Doctor ID:</b> ${escapeHtml(data.doctor_id)}</p>
@@ -803,27 +809,11 @@ async function generatePrescription() {
         <div class="rx-download-buttons">
           <a href="${escapeHtml(data.download_url)}" target="_blank" rel="noopener" class="rx-download-link">Download prescription PDF</a>
           ${driveLink}
-          ${whatsappButton}
         </div>
-        ${whatsappButton ? '<p class="rx-whatsapp-instruction">Note: WhatsApp will open with a pre-filled message. Download the PDF above and attach it manually before sending.</p>' : ''}
+        ${whatsappStatus}
       </div>`;
     
-    console.log('[WhatsApp Debug] DOM updated. Searching for button...');
-    
-    // Attach WhatsApp button event listener
-    if (whatsappButton) {
-      const whatsappBtn = document.getElementById('sendWhatsAppBtn');
-      console.log('[WhatsApp Debug] Button found in DOM:', whatsappBtn ? 'YES' : 'NO');
-      if (whatsappBtn) {
-        console.log('[WhatsApp Debug] Attaching click handler');
-        whatsappBtn.addEventListener('click', handleWhatsAppShare);
-        console.log('[WhatsApp Debug] Button is visible:', window.getComputedStyle(whatsappBtn).display !== 'none');
-      } else {
-        console.error('[WhatsApp Debug] Button HTML was created but not found in DOM!');
-      }
-    } else {
-      console.warn('[WhatsApp Debug] No button HTML created - phone_number may be missing');
-    }
+    console.log('[WhatsApp Debug] DOM updated with automatic WhatsApp status');
     
     generateBtn.textContent = 'Visit saved';
     generateBtn.disabled = true;

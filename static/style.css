@@ -2230,6 +2230,43 @@ html[data-user-role="public"] .role-button {
   margin-top: 16px;
 }
 
+/* WhatsApp Automatic Status Message */
+.rx-whatsapp-status {
+  margin-top: 16px;
+  padding: 16px;
+  background: linear-gradient(135deg, #E8F5E9 0%, #F1F8E9 100%);
+  border: 2px solid #25D366;
+  border-radius: 12px;
+  text-align: left;
+  box-shadow: 0 2px 8px rgba(37, 211, 102, 0.15);
+  animation: slideInWhatsApp 0.5s ease-out;
+}
+
+.rx-whatsapp-status strong {
+  display: flex;
+  align-items: center;
+  font-size: 15px;
+  color: #128C7E;
+}
+
+.rx-whatsapp-status p {
+  margin: 8px 0 0 28px;
+  font-size: 13px;
+  color: #555;
+  line-height: 1.5;
+}
+
+@keyframes slideInWhatsApp {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 @media (max-width: 620px) {
   .rx-whatsapp-btn {
     width: 100%;
@@ -2238,5 +2275,14 @@ html[data-user-role="public"] .role-button {
   
   .rx-download-buttons {
     gap: 8px;
+  }
+  
+  .rx-whatsapp-status {
+    padding: 12px;
+  }
+  
+  .rx-whatsapp-status p {
+    margin-left: 0;
+    font-size: 12px;
   }
 }
