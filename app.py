@@ -123,6 +123,7 @@ app.config.update(
     SESSION_COOKIE_SAMESITE="Lax",
     SESSION_COOKIE_SECURE=os.getenv("SESSION_COOKIE_SECURE", "false").lower() == "true",
     PERMANENT_SESSION_LIFETIME=timedelta(hours=8),
+    EXPIRY_WARNING_DAYS=int(os.getenv("EXPIRY_WARNING_DAYS", "7")),
     AUTH_USERS={
         "doctor": {
             "user_id": os.getenv("DOCTOR_ID", ""),
@@ -3263,7 +3264,7 @@ def delete_medicine_api(medicine_id):
 @role_required("medical_staff", api=True)
 def expiring_medicines_api():
     try:
-        days = int(request.args.get('days', 30))
+        days = int(request.args.get('days', app.config["EXPIRY_WARNING_DAYS"]))
 
         if days < 0:
             return jsonify({

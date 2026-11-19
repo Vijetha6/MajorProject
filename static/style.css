@@ -922,6 +922,51 @@ td { color: var(--muted); }
 .alert-count { color: var(--red); font-family: Georgia, "Times New Roman", serif; font-size: 28px; }
 .alert-card-danger { border-top: 3px solid var(--red); }
 .alert-list { color: var(--muted); font-size: 11px; line-height: 1.7; }
+.expired-medicine-modal {
+  width: min(680px, calc(100vw - 32px));
+  max-width: none;
+  max-height: min(82vh, 760px);
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  border-radius: 10px;
+  color: #1e293b;
+  box-shadow: 0 24px 80px rgba(15, 23, 42, 0.35);
+}
+.expired-medicine-modal::backdrop { background: rgba(15, 23, 42, 0.68); }
+.expired-medicine-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 20px;
+  background: #991b1b;
+  color: #fff;
+}
+.expired-medicine-modal-header h2 { margin: 0; font-size: 16px; letter-spacing: 0.04em; }
+.expired-medicine-modal-close {
+  flex: 0 0 auto;
+  padding: 7px 12px;
+  border: 1px solid #fff;
+  border-radius: 5px;
+  background: #fff;
+  color: #991b1b;
+  font-weight: 700;
+  cursor: pointer;
+}
+.expired-medicine-modal-body { max-height: calc(82vh - 64px); padding: 18px 20px 20px; overflow-y: auto; }
+.expired-medicine-warning {
+  margin: 0 0 14px;
+  padding: 12px;
+  border-left: 4px solid #b91c1c;
+  background: #fef2f2;
+  color: #991b1b;
+  font-weight: 700;
+}
+.expired-medicine-list { display: grid; gap: 10px; }
+.expired-medicine-item { padding: 12px; border: 1px solid #fecaca; border-radius: 6px; background: #fff; }
+.expired-medicine-item strong { color: #7f1d1d; }
+.expired-medicine-item p { margin: 5px 0 0; color: #475569; font-size: 12px; line-height: 1.6; }
 .expiry-status {
   display: inline-block;
   margin: 0 6px;
@@ -933,6 +978,7 @@ td { color: var(--muted); }
   vertical-align: middle;
 }
 .expiry-status-expired { color: #a61b1b; background: #fee4e2; }
+.expiry-status-expires-today { color: #8a4b08; background: #fff0d6; }
 .expiry-status-expiring { color: #9a4d00; background: #fff0d6; }
 .expiry-status-valid { color: #176b3a; background: #e2f5e9; }
 .expiry-verification-notice {

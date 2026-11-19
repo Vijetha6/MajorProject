@@ -14,9 +14,12 @@ DOCTOR_ID=<doctor login ID>
 DOCTOR_PASSWORD=<doctor development password>
 STAFF_ID=<medical staff login ID>
 STAFF_PASSWORD=<medical staff development password>
+EXPIRY_WARNING_DAYS=7
 ```
 
 Use a unique random Flask secret, and use non-demo passwords outside local development. Set `SESSION_COOKIE_SECURE=true` when serving the application over HTTPS. Local HTTP development leaves this setting false. Start the application with `python app.py`.
+
+The Medical Staff expiry monitor warns about medicines expiring within `EXPIRY_WARNING_DAYS` days (default: 7). When the staff dashboard loads, it also checks the existing inventory for expired medicines and displays a dismissible alert with stock and location details. Dismissing the popup leaves expired entries available in Expiry Alerts. The staff-only expiring-medicines API also accepts a `days` query parameter to override the threshold for an individual request.
 
 ## Doctor patient records and e-prescriptions
 

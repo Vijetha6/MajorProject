@@ -279,11 +279,18 @@ def get_expiring_medicines(days=30):
     conn = get_connection()
 
     medicines = conn.execute("""
-        SELECT * FROM medicines
+        SELECT *,
+               CAST(julianday(date(expiry_date)) - julianday(date(?)) AS INTEGER)
+                   AS days_remaining
+        FROM medicines
         WHERE date(expiry_date) >= date(?)
         AND date(expiry_date) <= date(?)
         ORDER BY expiry_date
-    """, (today.isoformat(), last_included_day.isoformat())).fetchall()
+    """, (
+        today.isoformat(),
+        today.isoformat(),
+        last_included_day.isoformat(),
+    )).fetchall()
 
     conn.close()
 
@@ -296,15 +303,28 @@ def get_expired_medicines():
     today = _india_today()
     conn = get_connection()
 
-    medicines = conn.execute("""
-        SELECT * FROM medicines
-        WHERE date(expiry_date) < date(?)
-        ORDER BY expiry_date
-    """, (today.isoformat(),)).fetchall()
+    medicines = conn.execute(
+        "SELECT * FROM medicines"
+    ).fetchall()
 
     conn.close()
 
-    return [dict(medicine) for medicine in medicines]
+    expired_medicines = []
+    for row in medicines:
+        medicine = dict(row)
+        try:
+            normalized_expiry = normalize_expiry(medicine.get("expiry_date"))
+            expiry_date = date.fromisoformat(normalized_expiry)
+        except ValueError:
+            continue
+
+        days_remaining = (expiry_date - today).days
+        if days_remaining < 0:
+            medicine["days_remaining"] = days_remaining
+            expired_medicines.append((expiry_date, medicine))
+
+    expired_medicines.sort(key=lambda item: item[0])
+    return [medicine for _, medicine in expired_medicines]
 
 
 # ==================== LOW STOCK MEDICINES ====================
