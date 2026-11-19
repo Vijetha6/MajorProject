@@ -307,6 +307,19 @@
     </div>
   </div>
 
+  {% if user_role == 'medical_staff' %}
+  <dialog id="expiredMedicineModal" class="expired-medicine-modal" aria-labelledby="expiredMedicineTitle">
+    <div class="expired-medicine-modal-header">
+      <h2 id="expiredMedicineTitle">EXPIRED MEDICINES ALERT</h2>
+      <button id="closeExpiredMedicineModal" class="expired-medicine-modal-close" type="button">Close</button>
+    </div>
+    <div class="expired-medicine-modal-body">
+      <p id="expiredMedicineWarning" class="expired-medicine-warning"></p>
+      <div id="expiredMedicineModalList" class="expired-medicine-list"></div>
+    </div>
+  </dialog>
+  {% endif %}
+
   <div id="medicineLocationModal" class="modal" hidden role="dialog" aria-modal="true" aria-labelledby="locationModalTitle">
     <div class="modal-backdrop" data-close-modal></div>
     <div class="modal-panel"><div class="modal-header"><h2 id="locationModalTitle">Medicine location</h2><button id="closeLocationModal" class="modal-close" type="button" aria-label="Close location dialog">&times;</button></div><div id="locationModalBody" class="location-details"><p>Row Number: <strong id="locationRowNumber">--</strong></p><p>Column Number: <strong id="locationColumnNumber">--</strong></p></div></div>

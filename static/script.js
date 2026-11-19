@@ -893,8 +893,13 @@ const inventoryRefreshBtn = document.getElementById('inventoryRefreshBtn');
 const expiringList = document.getElementById('expiringList');
 const expiredList = document.getElementById('expiredList');
 const staffLowStockList = document.getElementById('staffLowStockList');
+const expiredMedicineModal = document.getElementById('expiredMedicineModal');
+const expiredMedicineModalList = document.getElementById('expiredMedicineModalList');
+const expiredMedicineWarning = document.getElementById('expiredMedicineWarning');
+const closeExpiredMedicineModal = document.getElementById('closeExpiredMedicineModal');
 const expiryVerificationNotice = document.getElementById('expiryVerificationNotice');
 let pendingOcrExpiry = null;
+let expiredMedicinePopupShown = false;
 
 function expiryDaysInMonth(year, month) {
   if (month === 2) {
@@ -971,10 +976,26 @@ function expiryPresentation(value) {
   }, {});
   const remainingDays = (expiryUtcTimestamp(year, month, day) -
     expiryUtcTimestamp(todayParts.year, todayParts.month, todayParts.day)) / 86400000;
-  const status = remainingDays < 0 ? 'expired' : remainingDays <= 30 ? 'expiring' : 'valid';
+  const status = remainingDays < 0
+    ? 'expired'
+    : remainingDays === 0
+      ? 'expires-today'
+      : remainingDays <= 7
+        ? 'expiring'
+        : 'valid';
   const labels = {
-    en: { expired: 'Expired', expiring: 'Expiring Soon', valid: 'Valid' },
-    kn: { expired: 'ಅವಧಿ ಮುಗಿದಿದೆ', expiring: 'ಶೀಘ್ರದಲ್ಲೇ ಅವಧಿ ಮುಗಿಯುತ್ತದೆ', valid: 'ಮಾನ್ಯವಾಗಿದೆ' }
+    en: {
+      expired: 'Expired',
+      'expires-today': 'Expires Today',
+      expiring: 'Expiring Soon',
+      valid: 'Not Expiring Soon'
+    },
+    kn: {
+      expired: 'ಅವಧಿ ಮುಗಿದಿದೆ',
+      'expires-today': 'ಇಂದು ಅವಧಿ ಮುಗಿಯುತ್ತದೆ',
+      expiring: 'ಶೀಘ್ರದಲ್ಲೇ ಅವಧಿ ಮುಗಿಯುತ್ತದೆ',
+      valid: 'ಶೀಘ್ರದಲ್ಲೇ ಅವಧಿ ಮುಗಿಯುವುದಿಲ್ಲ'
+    }
   };
   const language = langToggle.value === 'kn' ? 'kn' : 'en';
   return { display, status, label: labels[language][status] };
@@ -1110,6 +1131,9 @@ async function saveStaffMedicine(event) {
     addMedicineForm.reset();
     setStaffFieldsEditable(false);
     loadInventory();
+    refreshExpiredMedicineStatus(false).catch(error => {
+      console.error('Could not refresh expired medicine status:', error);
+    });
   } catch (error) {
     staffUpdateStatus.textContent = error.message;
   }
@@ -1128,14 +1152,104 @@ async function loadInventory() {
   renderInventory(data.medicines || []);
 }
 
-function renderAlertList(element, medicines, emptyText, withExpiryStatus = false) {
+function renderAlertList(element, medicines, emptyText, withExpiryStatus = false, expiryNotifications = false) {
   element.innerHTML = medicines.length ? medicines.map(medicine => {
     const expiry = expiryPresentation(medicine.expiry_date);
+    if (expiryNotifications) {
+      const daysRemaining = medicine.days_remaining;
+      const medicineName = escapeHtml(medicine.medicine_name);
+      const days = Math.abs(daysRemaining);
+      const dayLabel = `${days} ${days === 1 ? 'day' : 'days'}`;
+      const warning = daysRemaining < 0
+        ? `${medicineName} expired ${dayLabel} ago.`
+        : daysRemaining === 0
+          ? `${medicineName} expires today.`
+          : daysRemaining === 1
+            ? `${medicineName} expires tomorrow.`
+            : `${medicineName} expires in ${dayLabel}.`;
+      return `<div><strong>${warning}</strong><small>Expiry date: ${escapeHtml(expiry.display)}</small></div>`;
+    }
     const status = withExpiryStatus && expiry.status
       ? `<span class="expiry-status expiry-status-${expiry.status}">${escapeHtml(expiry.label)}</span>`
       : '';
     return `<div>${escapeHtml(medicine.medicine_name)} ${status}<small>(${escapeHtml(expiry.display)} | Qty: ${escapeHtml(medicine.quantity)})</small></div>`;
   }).join('') : `<div class="empty-state">${emptyText}</div>`;
+}
+
+function renderExpiredMedicineList(element, medicines) {
+  if (!element) return;
+  element.textContent = '';
+  if (!medicines.length) {
+    const emptyState = document.createElement('div');
+    emptyState.className = 'empty-state';
+    emptyState.textContent = 'No expired medicines.';
+    element.appendChild(emptyState);
+    return;
+  }
+
+  medicines.forEach(medicine => {
+    const item = document.createElement('div');
+    item.className = 'expired-medicine-item';
+
+    const medicineName = medicine.medicine_name || 'Unnamed medicine';
+    const daysRemaining = Number(medicine.days_remaining);
+    const expiredDays = Number.isFinite(daysRemaining) ? Math.abs(daysRemaining) : null;
+    const title = document.createElement('strong');
+    title.textContent = expiredDays === null
+      ? `${medicineName} is expired.`
+      : `${medicineName} expired ${expiredDays} ${expiredDays === 1 ? 'day' : 'days'} ago.`;
+    item.appendChild(title);
+
+    const details = [];
+    if (medicine.brand_name) details.push(`Brand: ${medicine.brand_name}`);
+    details.push(`Expiry date: ${formatExpiryDisplay(medicine.expiry_date) || 'Unavailable'}`);
+    details.push(`Available stock: ${medicine.quantity ?? 'Not recorded'}`);
+
+    const location = [];
+    if (medicine.row_number !== null && medicine.row_number !== undefined && medicine.row_number !== '') {
+      location.push(`Row ${medicine.row_number}`);
+    }
+    if (medicine.column_number !== null && medicine.column_number !== undefined && medicine.column_number !== '') {
+      location.push(`Column ${medicine.column_number}`);
+    }
+    if (location.length) details.push(`Storage location: ${location.join(', ')}`);
+
+    const detailText = document.createElement('p');
+    detailText.textContent = details.join(' · ');
+    item.appendChild(detailText);
+    element.appendChild(item);
+  });
+}
+
+async function refreshExpiredMedicineStatus(showPopup = false) {
+  if (!expiredMedicineModal) return;
+
+  const response = await fetch('/medicines/expired');
+  if (!response.ok) {
+    throw new Error(`Could not load expired medicines (HTTP ${response.status}).`);
+  }
+  const data = await response.json();
+  if (!Array.isArray(data.medicines)) {
+    throw new Error('Expired-medicine response did not contain a medicine list.');
+  }
+
+  const medicines = data.medicines;
+  renderExpiredMedicineList(expiredList, medicines);
+  renderExpiredMedicineList(expiredMedicineModalList, medicines);
+  const expiredCount = document.getElementById('expiredCount');
+  if (expiredCount) expiredCount.textContent = medicines.length;
+  if (!medicines.length) {
+    expiredMedicineWarning.textContent = '';
+    return;
+  }
+
+  const count = medicines.length;
+  expiredMedicineWarning.textContent =
+    `WARNING! ${count} medicine${count === 1 ? '' : 's'} in your inventory ${count === 1 ? 'has' : 'have'} expired.`;
+  if (showPopup && !expiredMedicinePopupShown) {
+    expiredMedicinePopupShown = true;
+    expiredMedicineModal.showModal();
+  }
 }
 
 async function loadStaffAlerts() {
@@ -1144,11 +1258,20 @@ async function loadStaffAlerts() {
     fetch('/medicines/expired').then(response => response.json()),
     fetch('/medicines/low-stock').then(response => response.json())
   ]);
-  renderAlertList(expiringList, expiring.medicines || [], 'No medicines nearing expiry.', true);
-  renderAlertList(expiredList, expired.medicines || [], 'No expired medicines.', true);
+  renderAlertList(expiringList, expiring.medicines || [], 'No medicines nearing expiry.', false, true);
+  renderExpiredMedicineList(expiredList, expired.medicines || []);
   renderAlertList(staffLowStockList, lowStock.medicines || [], 'No low-stock medicines.');
   document.getElementById('expiringCount').textContent = expiring.count ?? (expiring.medicines || []).length;
   document.getElementById('expiredCount').textContent = expired.count ?? (expired.medicines || []).length;
+}
+
+if (closeExpiredMedicineModal) {
+  closeExpiredMedicineModal.addEventListener('click', () => expiredMedicineModal.close());
+}
+if (expiredMedicineModal) {
+  refreshExpiredMedicineStatus(true).catch(error => {
+    console.error('Could not load expired medicine dashboard alert:', error);
+  });
 }
 
 if (staffUpdateScanBtn) staffUpdateScanBtn.addEventListener('click', scanForStaffUpdate);

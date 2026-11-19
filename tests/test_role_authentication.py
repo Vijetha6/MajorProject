@@ -72,7 +72,10 @@ def test_doctor_can_login_and_only_sees_doctor_dashboard(monkeypatch, tmp_path):
     assert dashboard.status_code == 200
     assert b'id="generatorTab"' in dashboard.data
     assert b'id="inventorySection"' not in dashboard.data
+    assert b'id="alertsSection"' not in dashboard.data
     assert client.get("/medicines").status_code == 403
+    assert client.get("/medicines/expiring").status_code == 403
+    assert client.get("/medicines/expired").status_code == 403
     assert client.post("/generate-prescription", json={}).status_code == 400
 
 
@@ -89,8 +92,19 @@ def test_staff_can_login_and_only_access_staff_resources(monkeypatch, tmp_path):
     assert dashboard.status_code == 200
     assert b'id="inventorySection"' in dashboard.data
     assert b'id="generatorTab"' not in dashboard.data
+    assert b'id="alertsSection"' in dashboard.data
     assert client.get("/medicines").status_code == 200
+    assert client.get("/medicines/expiring").status_code == 200
+    assert client.get("/medicines/expired").status_code == 200
     assert client.post("/generate-prescription", json={}).status_code == 403
+
+
+def test_patient_cannot_access_staff_expiry_notifications():
+    client = medicine_app.app.test_client()
+
+    assert client.get("/medicines/expiring").status_code == 401
+    assert client.get("/medicines/expired").status_code == 401
+    assert b'id="alertsSection"' not in client.get("/").data
 
 
 def test_invalid_credentials_do_not_create_a_session(monkeypatch, tmp_path):
