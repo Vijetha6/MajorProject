@@ -285,16 +285,24 @@
           </article>
 
           <section id="prescriptionWorkflow" class="content-card doctor-workflow-card" hidden aria-labelledby="newPrescriptionTitle">
-            <div class="patient-card-heading"><div><p class="eyebrow">New consultation</p><h2 id="newPrescriptionTitle">New prescription</h2></div><button id="closePrescriptionBtn" class="secondary-button" type="button">Close</button></div>
+            <div class="patient-card-heading"><div><p class="eyebrow">New consultation</p><h2 id="newPrescriptionTitle">Voice-to-text prescription</h2></div><button id="closePrescriptionBtn" class="secondary-button" type="button">Close</button></div>
             <p id="prescriptionPatientSummary" class="patient-summary"></p>
 
             <section class="prescription-entry-panel" aria-labelledby="prescriptionEntryTitle">
               <h3 id="prescriptionEntryTitle">Prescription entry</h3>
-              <p class="hint">Type the doctor's instructions or record them, then review the text before saving.</p>
-              <button id="recordSpeechBtn" type="button" class="record-btn">Record Prescription</button>
+              <p class="hint">Speak naturally, review the transcript carefully, and confirm the medicine details before saving.</p>
+              <div class="voice-action-row">
+                <button id="recordSpeechBtn" type="button" class="record-btn">Record Prescription</button>
+                <button id="addMedicineBtn" type="button" class="secondary-button small-button">Add Medicine</button>
+                <button id="removeMedicineBtn" type="button" class="secondary-button small-button">Remove Medicine</button>
+              </div>
               <p id="speechStatus" class="hint" aria-live="polite"></p>
               <label for="prescriptionText">Prescription text (review before saving)</label>
               <textarea id="prescriptionText" placeholder="Type a medicine, dosage, and instructions, or use Record Prescription."></textarea>
+              <div id="structuredPrescriptionPreview" class="structured-prescription-preview" aria-live="polite">
+                <p class="preview-title">Structured medicine preview</p>
+                <div class="preview-empty">No medicine details detected yet. Speak or type a prescription to preview it here.</div>
+              </div>
             </section>
             <div class="generator-actions">
               <button id="generateBtn" type="button" class="generate-btn" disabled>Save visit and generate PDF</button>

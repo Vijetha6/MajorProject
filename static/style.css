@@ -225,6 +225,19 @@ li {
   margin-top: 14px;
 }
 
+.voice-action-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  margin: 10px 0 8px;
+}
+
+.small-button {
+  padding: 10px 16px;
+  font-size: 14px;
+}
+
 .record-btn {
   background: #7c3aed;
   color: white;
@@ -246,6 +259,51 @@ li {
 .record-btn:disabled {
   background: #9ca3af;
   cursor: not-allowed;
+}
+
+.structured-prescription-preview {
+  margin-top: 16px;
+  border: 1px solid #d9e5f3;
+  border-radius: 10px;
+  background: #f8fbff;
+  padding: 14px;
+}
+
+.preview-title {
+  margin: 0 0 10px;
+  font-size: 14px;
+  font-weight: 700;
+  color: #1f3b5f;
+}
+
+.preview-empty {
+  color: #5d6b82;
+  font-size: 14px;
+}
+
+.preview-medicine {
+  border: 1px solid #dfe9f6;
+  border-radius: 8px;
+  background: white;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+}
+
+.preview-medicine:last-child {
+  margin-bottom: 0;
+}
+
+.preview-medicine strong {
+  color: #0f172a;
+}
+
+.preview-medicine .row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 6px;
+  color: #334155;
+  font-size: 14px;
 }
 
 /* Loading */
@@ -1869,5 +1927,316 @@ html[data-user-role="public"] .role-button {
     width: 100%;
     padding-right: 16px;
     padding-left: 16px;
+  }
+}
+/* ---------------------------------------------------------------
+   INTELLIGENT PRESCRIPTION EXTRACTION UI
+   --------------------------------------------------------------- */
+
+.structured-prescription-preview {
+  margin: 18px 0;
+  padding: 14px;
+  border: 1px solid #e0e7ff;
+  border-radius: 6px;
+  background: #f8faff;
+}
+
+.preview-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 0 0 12px;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.extraction-indicator {
+  display: inline-block;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.extraction-ai {
+  background: #d1fae5;
+  color: #065f46;
+}
+
+.extraction-fallback {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.extraction-client {
+  background: #e0e7ff;
+  color: #3730a3;
+}
+
+.preview-empty {
+  padding: 24px 14px;
+  text-align: center;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.preview-note {
+  margin: 0 0 14px;
+  padding: 10px;
+  border-left: 3px solid #f59e0b;
+  background: #fef3c7;
+  color: #92400e;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.preview-medicine {
+  margin: 0 0 16px;
+  padding: 14px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  background: #fff;
+}
+
+.preview-medicine-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 0 0 12px;
+}
+
+.preview-medicine-header h4 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.remove-medicine-btn {
+  width: 26px;
+  height: 26px;
+  border: 1px solid #cbd5e1;
+  border-radius: 4px;
+  background: #fff;
+  color: #ef4444;
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.remove-medicine-btn:hover {
+  border-color: #ef4444;
+  background: #fef2f2;
+}
+
+.preview-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.preview-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.preview-grid input,
+.preview-grid select {
+  padding: 8px;
+  border: 1px solid #cbd5e1;
+  border-radius: 4px;
+  background: #fff;
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.preview-grid input:focus,
+.preview-grid select:focus {
+  border-color: #3b82f6;
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.1);
+}
+
+.preview-grid .field-warning input {
+  border-color: #f59e0b;
+  background: #fffbeb;
+}
+
+.preview-timing {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  margin: 0 0 10px;
+  padding: 10px;
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+  background: #f9fafb;
+}
+
+.timing-label {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.preview-timing label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--ink);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.preview-timing input[type="checkbox"] {
+  width: 15px;
+  height: 15px;
+  cursor: pointer;
+}
+
+.preview-general-advice {
+  margin: 16px 0 0;
+  padding: 12px;
+  border: 1px solid #bfdbfe;
+  border-radius: 6px;
+  background: #eff6ff;
+}
+
+.preview-general-advice h4 {
+  margin: 0 0 10px;
+  color: #1e40af;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.preview-general-advice ul {
+  margin: 0;
+  padding-left: 20px;
+}
+
+.preview-general-advice li {
+  margin: 4px 0;
+  color: #1e40af;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.advice-note {
+  margin: 10px 0 0;
+  color: #64748b;
+  font-size: 10px;
+  font-style: italic;
+}
+
+.voice-action-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.voice-action-row .small-button {
+  padding: 7px 10px;
+  font-size: 11px;
+}
+
+@media (max-width: 680px) {
+  .preview-grid {
+    grid-template-columns: 1fr;
+  }
+  
+  .voice-action-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  
+  .voice-action-row button {
+    width: 100%;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   WhatsApp Click-to-Chat Button Styles
+   ═══════════════════════════════════════════════════════════════ */
+
+.rx-whatsapp-btn {
+  display: inline-block;
+  background: #25D366;
+  color: white;
+  padding: 12px 24px;
+  border: none;
+  border-radius: 8px;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: none;
+  transition: background 0.3s, transform 0.2s, opacity 0.3s;
+  box-shadow: 0 2px 8px rgba(37, 211, 102, 0.25);
+  margin-top: 10px;
+}
+
+.rx-whatsapp-btn:hover {
+  background: #20BA5A;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(37, 211, 102, 0.35);
+}
+
+.rx-whatsapp-btn:active {
+  transform: translateY(0);
+  box-shadow: 0 2px 6px rgba(37, 211, 102, 0.25);
+}
+
+.rx-whatsapp-btn:disabled {
+  background: #9CA3AF;
+  cursor: not-allowed;
+  opacity: 0.6;
+  box-shadow: none;
+}
+
+.rx-whatsapp-instruction {
+  color: #6B7280;
+  font-size: 13px;
+  font-style: italic;
+  margin-top: 12px;
+  line-height: 1.5;
+  text-align: left;
+  padding: 10px;
+  background: #FEF3C7;
+  border-left: 3px solid #F59E0B;
+  border-radius: 4px;
+}
+
+.rx-download-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+@media (max-width: 620px) {
+  .rx-whatsapp-btn {
+    width: 100%;
+    text-align: center;
+  }
+  
+  .rx-download-buttons {
+    gap: 8px;
   }
 }

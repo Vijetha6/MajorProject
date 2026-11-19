@@ -1,72 +1,687 @@
-const imageInput = document.getElementById('imageInput');
-const preview = document.getElementById('preview');
-const previewContainer = document.getElementById('previewContainer');
-const submitBtn = document.getElementById('submitBtn');
-const output = document.getElementById('output');
-const fileSummary = document.getElementById('fileSummary');
-const langToggle = document.getElementById('langToggle');
-const loading = document.getElementById('loading');
-const generateBtn = document.getElementById('generateBtn');
-const generatorOutput = document.getElementById('generatorOutput');
-const recordSpeechBtn = document.getElementById('recordSpeechBtn');
-const speechStatus = document.getElementById('speechStatus');
+const isBrowser = typeof window !== 'undefined' && typeof document !== 'undefined';
+const imageInput = isBrowser ? document.getElementById('imageInput') : null;
+const preview = isBrowser ? document.getElementById('preview') : null;
+const previewContainer = isBrowser ? document.getElementById('previewContainer') : null;
+const submitBtn = isBrowser ? document.getElementById('submitBtn') : null;
+const output = isBrowser ? document.getElementById('output') : null;
+const fileSummary = isBrowser ? document.getElementById('fileSummary') : null;
+const langToggle = isBrowser ? document.getElementById('langToggle') : null;
+const loading = isBrowser ? document.getElementById('loading') : null;
+const generateBtn = isBrowser ? document.getElementById('generateBtn') : null;
+const generatorOutput = isBrowser ? document.getElementById('generatorOutput') : null;
+const recordSpeechBtn = isBrowser ? document.getElementById('recordSpeechBtn') : null;
+const speechStatus = isBrowser ? document.getElementById('speechStatus') : null;
 let selectedPatient = null;
 let selectedPatientVisits = [];
 
 let recognition = null;
 let recognizing = false;
+let recordingActive = false; // NEW: Track if doctor wants to continue recording
+let finalTranscript = '';
+let interimTranscript = '';
+let recognitionResultKeys = new Set();
+let recognitionSessionToken = 0;
+let micStream = null;
+let audioContext = null;
+let analyserNode = null;
+let vadAnimationFrame = null;
+let silenceTimer = null;
+let silenceStartedAt = null;
+let lastAudioLevel = 0;
+let lastSpeechDetectedAt = null; // NEW: Track when we last detected speech
+let hasDetectedSpeech = false; // NEW: Track if ANY speech has been detected
+let speechActivityDetected = false; // NEW: Track speech activity from recognition events
 
+const speechConfig = {
+  silenceDurationMs: 3000, // 3 seconds of silence
+  voiceThreshold: 0.08,
+  noiseFloor: 0.02,
+  smoothingTimeConstant: 0.18,
+  autoRestartDelay: 100 // Delay before auto-restart on recognition.onend
+};
 
-document.querySelector('.upload-btn').addEventListener('click', (e) => {
-  e.preventDefault();
-  imageInput.click();
-});
+function normalizeTranscriptText(text) {
+  if (!text) return '';
+  return String(text)
+    .replace(/\s+/g, ' ')
+    .replace(/\s+(?=[.,;:!?])/g, '')
+    .trim();
+}
 
+function appendTranscriptSegment(existingText, nextText) {
+  const current = normalizeTranscriptText(existingText || '');
+  const next = normalizeTranscriptText(nextText || '');
+  if (!current && !next) return '';
+  if (!current) return next;
+  if (!next) return current;
+  return `${current} ${next}`.replace(/\s+/g, ' ').trim();
+}
 
-imageInput.addEventListener('change', () => {
-  const files = Array.from(imageInput.files);
-  previewContainer.innerHTML = '';
+function buildLiveTranscript(finalText, interimText) {
+  const combined = [normalizeTranscriptText(finalText), normalizeTranscriptText(interimText)]
+    .filter(Boolean)
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return combined;
+}
 
-  if (!files.length) {
-    if (fileSummary) fileSummary.textContent = 'No images selected yet.';
+function deduplicateTranscript(rawTranscript) {
+  const rawItems = rawTranscript
+    .split(/(?<=[.!?])\s+|\n+/)
+    .map(item => normalizeTranscriptText(item))
+    .filter(Boolean);
+
+  const seen = new Set();
+  const deduped = [];
+
+  rawItems.forEach((item) => {
+    const key = item.toLowerCase();
+    if (!seen.has(key)) {
+      seen.add(key);
+      deduped.push(item);
+    }
+  });
+
+  return deduped.join(' ');
+}
+
+function getAudioLevel(analyser) {
+  if (!analyser) return 0;
+  const buffer = new Uint8Array(analyser.fftSize);
+  analyser.getByteTimeDomainData(buffer);
+  let sum = 0;
+  for (let i = 0; i < buffer.length; i += 1) {
+    const sample = (buffer[i] - 128) / 128;
+    sum += sample * sample;
+  }
+  return Math.sqrt(sum / buffer.length);
+}
+
+function evaluateSilenceState(audioLevel, currentState) {
+  if (audioLevel >= speechConfig.voiceThreshold + speechConfig.noiseFloor) {
+    return {
+      ...currentState,
+      speechDetected: true,
+      silenceStartedAt: null,
+      lastAudioLevel: audioLevel,
+      status: 'Voice detected.'
+    };
+  }
+
+  if (currentState.speechDetected) {
+    const silenceStart = currentState.silenceStartedAt || Date.now();
+    const elapsed = Date.now() - silenceStart;
+    if (elapsed >= speechConfig.silenceDurationMs) {
+      return {
+        ...currentState,
+        speechDetected: false,
+        silenceStartedAt: silenceStart,
+        lastAudioLevel: audioLevel,
+        status: 'Silence detected – stopping in 3 seconds.'
+      };
+    }
+    return {
+      ...currentState,
+      speechDetected: false,
+      silenceStartedAt: silenceStart,
+      lastAudioLevel: audioLevel,
+      status: 'Silence detected – stopping in 3 seconds.'
+    };
+  }
+
+  return {
+    ...currentState,
+    speechDetected: false,
+    silenceStartedAt: currentState.silenceStartedAt || Date.now(),
+    lastAudioLevel: audioLevel,
+    status: 'Ready to record.'
+  };
+}
+
+function isLikelyMedicineName(text) {
+  if (!text || text.length < 2) return false;
+  
+  const textLower = text.toLowerCase().trim();
+  
+  // Only exclude very obvious non-medicine phrases
+  const excludePhrases = [
+    'hello doctor speaking i am',
+    'recording completed',
+    'take adequate rest',
+    'drink plenty of water',
+    'patient should',
+    'good morning good afternoon'
+  ];
+  
+  for (const phrase of excludePhrases) {
+    if (textLower.includes(phrase)) return false;
+  }
+  
+  // Accept if it has ANY medicine indicators
+  const hasDosage = /\d+\s*(?:mg|ml|mcg|g|milligram|mill)\b/i.test(text);
+  const hasFrequency = /\b(once|twice|thrice|daily|weekly|per day|a day)\b/i.test(text);
+  const hasDuration = /\bfor\s+\d+\s*(day|days|week|weeks)\b/i.test(text);
+  const hasMedicineForm = /\b(tablet|capsule|syrup|injection)\b/i.test(text);
+  
+  // Common medicine name patterns
+  const knownMedicines = [
+    'paracetamol', 'amoxicillin', 'crocin', 'dolo', 'cetirizine',
+    'amlodipine', 'metformin', 'aspirin', 'ibuprofen', 'omeprazole',
+    'azithromycin', 'ciprofloxacin', 'amoxycillin', 'belov', 'belov'
+  ];
+  
+  const hasKnownMedicine = knownMedicines.some(med => textLower.includes(med));
+  
+  // Accept if it has dosage OR known medicine OR frequency+duration
+  return hasKnownMedicine || hasDosage || (hasFrequency && hasDuration) || (hasDosage && hasFrequency);
+}
+
+function parseMedicineLine(line) {
+  const text = normalizeTranscriptText(line);
+  if (!text || text.length < 3) return null;
+  
+  // First check if it even looks like medicine
+  if (!isLikelyMedicineName(text)) return null;
+
+  // Extract medicine name - look for word before dosage or frequency
+  let nameMatch = text.match(/^(?:prescribe|prescribed)?\s*([A-Za-z][A-Za-z0-9 .()-]{1,}?)(?=\s+(?:\d+(?:\/\d+)?\s*(?:mg|ml|mcg|g|milligram|mill)|once|twice|thrice|daily|weekly))/i);
+  
+  if (!nameMatch) {
+    // Try to match known medicine names explicitly
+    const knownMedicines = ['paracetamol', 'amoxicillin', 'crocin', 'dolo', 'cetirizine', 'amlodipine', 'metformin', 'aspirin', 'ibuprofen', 'omeprazole', 'azithromycin', 'ciprofloxacin', 'amoxycillin', 'belov', 'belov', 'belov'];
+    for (const med of knownMedicines) {
+      const medRegex = new RegExp(`\\b(${med})\\b`, 'i');
+      const match = text.match(medRegex);
+      if (match) {
+        nameMatch = {1: match[1]};
+        break;
+      }
+    }
+  }
+  
+  if (!nameMatch) {
+    // Last resort: take first 1-3 words that look like a medicine name
+    const words = text.split(/\s+/);
+    let candidateName = '';
+    for (let i = 0; i < Math.min(3, words.length); i++) {
+      const word = words[i];
+      // Skip filler words
+      if (/^(the|for|in|on|at|to|a|an|prescribe|prescribed|patient|should|take|tablet|capsule)$/i.test(word)) {
+        continue;
+      }
+      // Accept words that look like medicine names
+      if (/^[A-Za-z]{3,}/.test(word)) {
+        candidateName = word;
+        break;
+      }
+    }
+    if (candidateName && candidateName.length >= 3) {
+      nameMatch = {1: candidateName};
+    } else {
+      return null;
+    }
+  }
+
+  let name = nameMatch[1].trim();
+  
+  // Clean up medicine name
+  name = name.replace(/\b(prescribe|prescribed|tablet|capsule|syrup|doctor|speaking|uh|um|the|mg|ml)\b/ig, '').trim();
+  if (!name || name.length < 2) return null;
+
+  const dosageMatch = text.match(/(\d+(?:\/\d+)?\s*(?:mg|ml|mcg|g|milligram|milligrams|mill))/i);
+  let dosage = dosageMatch ? dosageMatch[1].trim() : 'Dose not specified';
+  
+  // Normalize dosage
+  dosage = dosage.replace(/\bmilligram(?:s)?\b/ig, 'mg').replace(/\bmill\b/ig, 'mg');
+
+  // Extract frequency
+  let frequency = 'As directed';
+  if (/\b(?:once|one time|1)\s+(?:daily|a day|per day|in a day|in the morning)\b/i.test(text)) {
+    frequency = 'Once daily';
+  } else if (/\b(?:twice|two times|2)\s+(?:daily|a day|per day|in a day)\b/i.test(text)) {
+    frequency = 'Twice daily';
+  } else if (/\b(?:thrice|three times|3)\s+(?:daily|a day|per day|in a day)\b/i.test(text)) {
+    frequency = 'Thrice daily';
+  } else if (/\b(?:four times|4 times)\s+(?:daily|a day|per day)\b/i.test(text)) {
+    frequency = 'Four times daily';
+  }
+
+  // Extract duration
+  let duration = 'As directed';
+  const durationMatch = text.match(/for\s+(\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s*(?:day|days|week|weeks|month|months)/i);
+  if (durationMatch) {
+    duration = normalizeTranscriptText(durationMatch[0].replace(/^for\s+/i, ''));
+    duration = duration.charAt(0).toUpperCase() + duration.slice(1);
+  }
+
+  // Extract timing (Morning, Afternoon, Evening, Bedtime)
+  const timing = [];
+  if (/\b(morning|in the morning)\b/i.test(text)) timing.push('Morning');
+  if (/\b(afternoon|in the afternoon)\b/i.test(text)) timing.push('Afternoon');
+  if (/\b(evening|in the evening)\b/i.test(text)) timing.push('Evening');
+  if (/\b(bedtime|night|before bed|before sleep)\b/i.test(text)) timing.push('Bedtime');
+  
+  // Extract food instruction
+  const foodMatch = text.match(/(after food|before food|with food|empty stomach|after meal|before meal|after the food)/i);
+  const food_instruction = foodMatch ? foodMatch[1].trim() : '';
+
+  // Extract special instructions (excluding parsed elements)
+  let instructions = text;
+  instructions = instructions.replace(new RegExp(name, 'ig'), '');
+  if (dosage !== 'Dose not specified') {
+    instructions = instructions.replace(new RegExp(dosage.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'ig'), '');
+  }
+  instructions = instructions.replace(/\b(prescribe|prescribed|morning|afternoon|evening|bedtime|after food|before food|with food|take|tablet|capsule|daily|weekly|uh|um|once|twice|thrice|for|day|days|week|weeks|the|patient|should)\b/ig, ' ');
+  instructions = instructions.replace(/[.,;]+/g, ' ');
+  instructions = normalizeTranscriptText(instructions);
+  if (!instructions || instructions.length < 3) instructions = '';
+
+  return {
+    name: name.charAt(0).toUpperCase() + name.slice(1),
+    dosage,
+    frequency: frequency,
+    duration: duration,
+    timing,
+    food_instruction,
+    special_instructions: instructions,
+    instructions
+  };
+}
+
+function getStructuredMedicinesFromText(rawText) {
+  const text = normalizeTranscriptText(rawText || '');
+  if (!text) return [];
+
+  // Split by medicine separators - be more generous
+  const segments = text
+    .split(/(?:\.{1,}|\balso prescribe\b|\band prescribe\b|\bprescribed?\b|\bfor the second medicine\b|\bsecond medicine\b|\bfirst medicine\b)\s+/i)
+    .map(item => normalizeTranscriptText(item))
+    .filter(Boolean);
+
+  const medicines = [];
+  const seenNames = new Set(); // Prevent duplicates
+  
+  for (const segment of segments) {
+    const parsed = parseMedicineLine(segment);
+    if (parsed && parsed.name && parsed.name.length > 2) {
+      const nameKey = parsed.name.toLowerCase();
+      // Only add if not already added
+      if (!seenNames.has(nameKey)) {
+        medicines.push(parsed);
+        seenNames.add(nameKey);
+      }
+    }
+  }
+
+  return medicines;
+}
+
+let cachedMedicines = [];
+let cachedGeneralAdvice = [];
+let extractionSource = 'client';
+let isExtracting = false;
+
+async function extractPrescriptionIntelligently(text) {
+  if (!text || !text.trim()) {
+    return { medicines: [], general_advice: [], extraction_source: 'client' };
+  }
+
+  try {
+    const response = await fetch('/extract-prescription', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: text.trim() })
+    });
+
+    if (!response.ok) {
+      console.warn('Server extraction failed, using client-side fallback');
+      return { 
+        medicines: getStructuredMedicinesFromText(text), 
+        general_advice: [],
+        extraction_source: 'client'
+      };
+    }
+
+    const data = await response.json();
+    return {
+      medicines: data.medicines || [],
+      general_advice: data.general_advice || [],
+      extraction_source: data.extraction_source || 'unknown',
+      note: data.note || ''
+    };
+  } catch (error) {
+    console.error('Extraction error:', error);
+    return { 
+      medicines: getStructuredMedicinesFromText(text), 
+      general_advice: [],
+      extraction_source: 'client'
+    };
+  }
+}
+
+async function renderStructuredPrescriptionPreview() {
+  const field = document.getElementById('prescriptionText');
+  const preview = document.getElementById('structuredPrescriptionPreview');
+  if (!field || !preview) return;
+
+  const text = field.value.trim();
+
+  if (!text) {
+    preview.innerHTML = '<p class="preview-title">Structured medicine preview</p><div class="preview-empty">No medicine details detected yet. Speak or type a prescription to preview it here.</div>';
+    cachedMedicines = [];
+    cachedGeneralAdvice = [];
     return;
   }
 
-  if (fileSummary) {
-    fileSummary.textContent = `${files.length} image${files.length === 1 ? '' : 's'} ready to scan.`;
+  // Show loading state
+  if (isExtracting) return;
+  isExtracting = true;
+  
+  const loadingHtml = '<p class="preview-title">Structured medicine preview</p><div class="preview-empty">🔄 Analyzing prescription with AI...</div>';
+  preview.innerHTML = loadingHtml;
+
+  // Use intelligent extraction
+  const result = await extractPrescriptionIntelligently(text);
+  const medicines = result.medicines || [];
+  const generalAdvice = result.general_advice || [];
+  extractionSource = result.extraction_source || 'client';
+  
+  cachedMedicines = medicines;
+  cachedGeneralAdvice = generalAdvice;
+  
+  isExtracting = false;
+
+  if (!medicines.length && !generalAdvice.length) {
+    let emptyMessage = 'No medicine details detected yet. Speak or type a prescription to preview it here.';
+    if (result.note) {
+      emptyMessage = `${result.note}<br><br>No medicines detected.`;
+    }
+    preview.innerHTML = `<p class="preview-title">Structured medicine preview</p><div class="preview-empty">${emptyMessage}</div>`;
+    return;
   }
-  files.forEach((file, index) => {
-    const image = index === 0 ? preview : document.createElement('img');
-    image.className = 'upload-preview';
-    image.alt = `Selected medicine image ${index + 1}`;
-    image.hidden = false;
-    previewContainer.appendChild(image);
 
-    const reader = new FileReader();
-    reader.onload = (event) => { image.src = event.target.result; };
-    reader.readAsDataURL(file);
+  const timingSlots = ['Morning', 'Afternoon', 'Evening', 'Bedtime'];
+  
+  let sourceIndicator = '';
+  if (extractionSource === 'gemini') {
+    sourceIndicator = '<span class="extraction-indicator extraction-ai">✓ AI-powered extraction</span>';
+  } else if (extractionSource === 'fallback') {
+    sourceIndicator = '<span class="extraction-indicator extraction-fallback">⚠ Pattern-based fallback</span>';
+  } else {
+    sourceIndicator = '<span class="extraction-indicator extraction-client">Client-side parsing</span>';
+  }
+  
+  let html = `<p class="preview-title">Structured medicine preview ${sourceIndicator}</p>`;
+  
+  if (result.note) {
+    html += `<div class="preview-note">${escapeHtml(result.note)}</div>`;
+  }
+  
+  if (medicines.length > 0) {
+    html += medicines.map((medicine, idx) => {
+      // Highlight missing or uncertain information
+      const nameClass = medicine.name && medicine.name.length > 2 ? '' : 'field-warning';
+      const dosageClass = medicine.dosage && medicine.dosage !== 'Dose not specified' ? '' : 'field-warning';
+      
+      return `
+        <div class="preview-medicine">
+          <div class="preview-medicine-header">
+            <h4>Medicine ${idx + 1}</h4>
+            <button type="button" class="remove-medicine-btn" data-index="${idx}" title="Remove this medicine">×</button>
+          </div>
+          <div class="preview-grid">
+            <label class="${nameClass}">Medicine name<input data-field="name" data-index="${idx}" value="${escapeHtml(medicine.name)}" placeholder="Required" /></label>
+            <label class="${dosageClass}">Dosage<input data-field="dosage" data-index="${idx}" value="${escapeHtml(medicine.dosage)}" placeholder="e.g., 500 mg" /></label>
+            <label>Frequency<select data-field="frequency" data-index="${idx}">
+              <option value="As directed" ${medicine.frequency === 'As directed' ? 'selected' : ''}>As directed</option>
+              <option value="Once daily" ${medicine.frequency === 'Once daily' ? 'selected' : ''}>Once daily</option>
+              <option value="Twice daily" ${medicine.frequency === 'Twice daily' ? 'selected' : ''}>Twice daily</option>
+              <option value="Thrice daily" ${medicine.frequency === 'Thrice daily' ? 'selected' : ''}>Thrice daily</option>
+              <option value="Four times daily" ${medicine.frequency === 'Four times daily' ? 'selected' : ''}>Four times daily</option>
+              <option value="Once weekly" ${medicine.frequency === 'Once weekly' ? 'selected' : ''}>Once weekly</option>
+              <option value="Twice weekly" ${medicine.frequency === 'Twice weekly' ? 'selected' : ''}>Twice weekly</option>
+            </select></label>
+            <label>Duration<input data-field="duration" data-index="${idx}" value="${escapeHtml(medicine.duration)}" placeholder="e.g., 5 days" /></label>
+          </div>
+          <div class="preview-timing">
+            <span class="timing-label">Timing:</span>
+            ${timingSlots.map(slot => `<label><input type="checkbox" data-field="timing" data-index="${idx}" data-slot="${slot}" ${(medicine.timing || []).includes(slot) ? 'checked' : ''} /> ${slot}</label>`).join('')}
+          </div>
+          <div class="preview-grid">
+            <label>Food instruction<input data-field="food_instruction" data-index="${idx}" value="${escapeHtml(medicine.food_instruction || '')}" placeholder="e.g., After food" /></label>
+            <label>Additional instructions<input data-field="special_instructions" data-index="${idx}" value="${escapeHtml(medicine.special_instructions || '')}" placeholder="Optional notes" /></label>
+          </div>
+        </div>
+      `;
+    }).join('');
+  }
+  
+  if (generalAdvice.length > 0) {
+    html += `
+      <div class="preview-general-advice">
+        <h4>General patient advice</h4>
+        <ul>${generalAdvice.map(advice => `<li>${escapeHtml(advice)}</li>`).join('')}</ul>
+        <p class="advice-note">This advice will not be included in the prescription medicines list.</p>
+      </div>
+    `;
+  }
+  
+  preview.innerHTML = html;
+  
+  // Add event listeners for remove buttons
+  preview.querySelectorAll('.remove-medicine-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      const index = parseInt(e.target.dataset.index);
+      cachedMedicines.splice(index, 1);
+      renderStructuredPrescriptionPreview();
+    });
   });
-});
+}
 
-const uploadZone = document.querySelector('.upload-btn');
-['dragenter', 'dragover'].forEach((eventName) => {
-  uploadZone.addEventListener(eventName, (event) => {
-    event.preventDefault();
-    uploadZone.classList.add('is-dragging');
+function collectStructuredMedicines() {
+  const preview = document.getElementById('structuredPrescriptionPreview');
+  if (!preview) {
+    // Fallback: use client-side extraction if preview doesn't exist
+    return getStructuredMedicinesFromText(document.getElementById('prescriptionText')?.value || '');
+  }
+
+  const medicineCards = preview.querySelectorAll('.preview-medicine');
+  if (!medicineCards.length) {
+    // No cards rendered, return cached or client-side extracted
+    if (cachedMedicines.length > 0) {
+      return cachedMedicines;
+    }
+    return getStructuredMedicinesFromText(document.getElementById('prescriptionText')?.value || '');
+  }
+
+  // Collect from rendered preview cards (user may have edited)
+  return Array.from(medicineCards).map((card, index) => {
+    const getValue = (field) => {
+      const elem = card.querySelector(`[data-field="${field}"][data-index="${index}"]`);
+      return elem?.value || '';
+    };
+    const selectedTiming = Array.from(card.querySelectorAll(`[data-field="timing"][data-index="${index}"]:checked`)).map(item => item.dataset.slot);
+    return {
+      name: getValue('name').trim(),
+      dosage: getValue('dosage').trim(),
+      frequency: getValue('frequency').trim() || 'As directed',
+      duration: getValue('duration').trim() || 'As directed',
+      timing: selectedTiming,
+      food_instruction: getValue('food_instruction').trim(),
+      special_instructions: getValue('special_instructions').trim(),
+      instructions: getValue('special_instructions').trim(),
+    };
+  }).filter(item => item.name && item.name.length > 1); // Only include medicines with valid names
+}
+
+const addMedicineBtn = isBrowser ? document.getElementById('addMedicineBtn') : null;
+if (addMedicineBtn) {
+  addMedicineBtn.addEventListener('click', async () => {
+    // Add a blank medicine to the cached list and re-render
+    const newMedicine = {
+      name: '',
+      dosage: 'Dose not specified',
+      frequency: 'As directed',
+      duration: 'As directed',
+      timing: [],
+      food_instruction: '',
+      special_instructions: ''
+    };
+    cachedMedicines.push(newMedicine);
+    
+    // Re-render immediately without extraction
+    const preview = document.getElementById('structuredPrescriptionPreview');
+    if (preview) {
+      const timingSlots = ['Morning', 'Afternoon', 'Evening', 'Bedtime'];
+      const medicines = cachedMedicines;
+      
+      let sourceIndicator = '';
+      if (extractionSource === 'gemini') {
+        sourceIndicator = '<span class="extraction-indicator extraction-ai">✓ AI-powered extraction</span>';
+      } else if (extractionSource === 'fallback') {
+        sourceIndicator = '<span class="extraction-indicator extraction-fallback">⚠ Pattern-based fallback</span>';
+      } else {
+        sourceIndicator = '<span class="extraction-indicator extraction-client">Client-side parsing</span>';
+      }
+      
+      let html = `<p class="preview-title">Structured medicine preview ${sourceIndicator}</p>`;
+      
+      html += medicines.map((medicine, idx) => {
+        const nameClass = medicine.name && medicine.name.length > 2 ? '' : 'field-warning';
+        const dosageClass = medicine.dosage && medicine.dosage !== 'Dose not specified' ? '' : 'field-warning';
+        
+        return `
+          <div class="preview-medicine">
+            <div class="preview-medicine-header">
+              <h4>Medicine ${idx + 1}</h4>
+              <button type="button" class="remove-medicine-btn" data-index="${idx}" title="Remove this medicine">×</button>
+            </div>
+            <div class="preview-grid">
+              <label class="${nameClass}">Medicine name<input data-field="name" data-index="${idx}" value="${escapeHtml(medicine.name)}" placeholder="Required" /></label>
+              <label class="${dosageClass}">Dosage<input data-field="dosage" data-index="${idx}" value="${escapeHtml(medicine.dosage)}" placeholder="e.g., 500 mg" /></label>
+              <label>Frequency<select data-field="frequency" data-index="${idx}">
+                <option value="As directed" ${medicine.frequency === 'As directed' ? 'selected' : ''}>As directed</option>
+                <option value="Once daily" ${medicine.frequency === 'Once daily' ? 'selected' : ''}>Once daily</option>
+                <option value="Twice daily" ${medicine.frequency === 'Twice daily' ? 'selected' : ''}>Twice daily</option>
+                <option value="Thrice daily" ${medicine.frequency === 'Thrice daily' ? 'selected' : ''}>Thrice daily</option>
+                <option value="Four times daily" ${medicine.frequency === 'Four times daily' ? 'selected' : ''}>Four times daily</option>
+                <option value="Once weekly" ${medicine.frequency === 'Once weekly' ? 'selected' : ''}>Once weekly</option>
+                <option value="Twice weekly" ${medicine.frequency === 'Twice weekly' ? 'selected' : ''}>Twice weekly</option>
+              </select></label>
+              <label>Duration<input data-field="duration" data-index="${idx}" value="${escapeHtml(medicine.duration)}" placeholder="e.g., 5 days" /></label>
+            </div>
+            <div class="preview-timing">
+              <span class="timing-label">Timing:</span>
+              ${timingSlots.map(slot => `<label><input type="checkbox" data-field="timing" data-index="${idx}" data-slot="${slot}" ${(medicine.timing || []).includes(slot) ? 'checked' : ''} /> ${slot}</label>`).join('')}
+            </div>
+            <div class="preview-grid">
+              <label>Food instruction<input data-field="food_instruction" data-index="${idx}" value="${escapeHtml(medicine.food_instruction || '')}" placeholder="e.g., After food" /></label>
+              <label>Additional instructions<input data-field="special_instructions" data-index="${idx}" value="${escapeHtml(medicine.special_instructions || '')}" placeholder="Optional notes" /></label>
+            </div>
+          </div>
+        `;
+      }).join('');
+      
+      if (cachedGeneralAdvice.length > 0) {
+        html += `
+          <div class="preview-general-advice">
+            <h4>General patient advice</h4>
+            <ul>${cachedGeneralAdvice.map(advice => `<li>${escapeHtml(advice)}</li>`).join('')}</ul>
+            <p class="advice-note">This advice will not be included in the prescription medicines list.</p>
+          </div>
+        `;
+      }
+      
+      preview.innerHTML = html;
+      
+      // Add event listeners for remove buttons
+      preview.querySelectorAll('.remove-medicine-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          const index = parseInt(e.target.dataset.index);
+          cachedMedicines.splice(index, 1);
+          renderStructuredPrescriptionPreview();
+        });
+      });
+      
+      // Focus on the new medicine name field
+      const newMedicineIndex = medicines.length - 1;
+      const nameInput = preview.querySelector(`[data-field="name"][data-index="${newMedicineIndex}"]`);
+      if (nameInput) {
+        nameInput.focus();
+      }
+    }
   });
-});
-['dragleave', 'drop'].forEach((eventName) => {
-  uploadZone.addEventListener(eventName, (event) => {
-    event.preventDefault();
-    uploadZone.classList.remove('is-dragging');
+}
+
+const removeMedicineBtn = isBrowser ? document.getElementById('removeMedicineBtn') : null;
+if (removeMedicineBtn) {
+  removeMedicineBtn.addEventListener('click', () => {
+    if (cachedMedicines.length > 0) {
+      cachedMedicines.pop();
+      renderStructuredPrescriptionPreview();
+    }
   });
-});
-uploadZone.addEventListener('drop', (event) => {
-  const files = event.dataTransfer.files;
-  if (!files.length) return;
-  imageInput.files = files;
-  imageInput.dispatchEvent(new Event('change'));
-});
+}
+
+if (isBrowser) {
+  const uploadButton = document.querySelector('.upload-btn');
+  if (uploadButton && imageInput) {
+    uploadButton.addEventListener('click', (e) => {
+      e.preventDefault();
+      imageInput.click();
+    });
+  }
+
+  if (imageInput && previewContainer) {
+    imageInput.addEventListener('change', () => {
+      const files = Array.from(imageInput.files);
+      previewContainer.innerHTML = '';
+
+      if (!files.length) {
+        if (fileSummary) fileSummary.textContent = 'No images selected yet.';
+        return;
+      }
+
+      if (fileSummary) {
+        fileSummary.textContent = `${files.length} image${files.length === 1 ? '' : 's'} ready to scan.`;
+      }
+      files.forEach((file, index) => {
+        const image = index === 0 ? preview : document.createElement('img');
+        image.className = 'upload-preview';
+        image.alt = `Selected medicine image ${index + 1}`;
+        image.hidden = false;
+        previewContainer.appendChild(image);
+
+        const reader = new FileReader();
+        reader.onload = (event) => { image.src = event.target.result; };
+        reader.readAsDataURL(file);
+      });
+    });
+  }
+
+  const uploadZone = document.querySelector('.upload-btn');
+  if (uploadZone) {
+    ['dragenter', 'dragover'].forEach((eventName) => {
+      uploadZone.addEventListener(eventName, (event) => {
+        event.preventDefault();
+        uploadZone.classList.add('is-dragging');
+      });
+    });
+    ['dragleave', 'drop'].forEach((eventName) => {
+      uploadZone.addEventListener(eventName, (event) => {
+        event.preventDefault();
+        uploadZone.classList.remove('is-dragging');
+      });
+    });
+    uploadZone.addEventListener('drop', (event) => {
+      const files = event.dataTransfer.files;
+      if (!files.length) return;
+      imageInput.files = files;
+      imageInput.dispatchEvent(new Event('change'));
+    });
+  }
+}
 
 // Submit for processing
 submitBtn.addEventListener('click', async () => {
@@ -123,13 +738,22 @@ function showGeneratorError(message) {
 function prescriptionInput() {
   const prescriptionText = document.getElementById('prescriptionText').value.trim();
   if (!prescriptionText) throw new Error('Record a prescription before saving.');
-  return { text: prescriptionText };
+  const medicines = collectStructuredMedicines();
+  if (!medicines.length) throw new Error('Enter at least one valid medicine before saving.');
+  return { text: prescriptionText, medicines };
 }
 
 const prescriptionTextField = document.getElementById('prescriptionText');
 if (prescriptionTextField) {
+  let extractionTimeout;
   prescriptionTextField.addEventListener('input', () => {
     generateBtn.disabled = !prescriptionTextField.value.trim();
+    
+    // Debounce intelligent extraction (wait 1.5 seconds after user stops typing)
+    clearTimeout(extractionTimeout);
+    extractionTimeout = setTimeout(() => {
+      renderStructuredPrescriptionPreview();
+    }, 1500);
   });
 }
 
@@ -142,7 +766,8 @@ async function generatePrescription() {
     generateBtn.textContent = 'Saving visit…';
     const payload = {
       patient_id: selectedPatient.patient_id,
-      ...prescription
+      ...prescription,
+      medicines: prescription.medicines || []
     };
     const response = await fetch('/generate-prescription', {
       method: 'POST',
@@ -152,9 +777,22 @@ async function generatePrescription() {
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || `Failed to save prescription (HTTP ${response.status}).`);
 
+    // DEBUG: Log the response data
+    console.log('[WhatsApp Debug] Backend response:', data);
+    console.log('[WhatsApp Debug] phone_number field:', data.phone_number);
+
     const driveLink = data.drive_url
       ? `<a href="${escapeHtml(data.drive_url)}" target="_blank" rel="noopener" class="rx-download-link rx-drive-link">View on Google Drive</a>`
       : '';
+    
+    // Prepare WhatsApp button
+    const whatsappButton = data.phone_number 
+      ? `<button id="sendWhatsAppBtn" class="rx-whatsapp-btn" type="button" data-patient-name="${escapeHtml(data.patient)}" data-phone="${escapeHtml(data.phone_number)}" data-visit-id="${escapeHtml(data.visit_id)}">Send Prescription via WhatsApp</button>`
+      : '';
+    
+    console.log('[WhatsApp Debug] Button HTML created:', whatsappButton ? 'YES' : 'NO');
+    console.log('[WhatsApp Debug] Button HTML length:', whatsappButton.length);
+    
     generatorOutput.innerHTML = `
       <div class="medicine-card">
         <h3>Visit saved and prescription generated</h3>
@@ -165,8 +803,28 @@ async function generatePrescription() {
         <div class="rx-download-buttons">
           <a href="${escapeHtml(data.download_url)}" target="_blank" rel="noopener" class="rx-download-link">Download prescription PDF</a>
           ${driveLink}
+          ${whatsappButton}
         </div>
+        ${whatsappButton ? '<p class="rx-whatsapp-instruction">Note: WhatsApp will open with a pre-filled message. Download the PDF above and attach it manually before sending.</p>' : ''}
       </div>`;
+    
+    console.log('[WhatsApp Debug] DOM updated. Searching for button...');
+    
+    // Attach WhatsApp button event listener
+    if (whatsappButton) {
+      const whatsappBtn = document.getElementById('sendWhatsAppBtn');
+      console.log('[WhatsApp Debug] Button found in DOM:', whatsappBtn ? 'YES' : 'NO');
+      if (whatsappBtn) {
+        console.log('[WhatsApp Debug] Attaching click handler');
+        whatsappBtn.addEventListener('click', handleWhatsAppShare);
+        console.log('[WhatsApp Debug] Button is visible:', window.getComputedStyle(whatsappBtn).display !== 'none');
+      } else {
+        console.error('[WhatsApp Debug] Button HTML was created but not found in DOM!');
+      }
+    } else {
+      console.warn('[WhatsApp Debug] No button HTML created - phone_number may be missing');
+    }
+    
     generateBtn.textContent = 'Visit saved';
     generateBtn.disabled = true;
     recordSpeechBtn.disabled = true;
@@ -307,6 +965,9 @@ async function loadSelectedPatient(patientId, startNew = false) {
 function beginNewPrescription() {
   if (!selectedPatient) return;
   prescriptionTextField.value = '';
+  cachedMedicines = [];
+  cachedGeneralAdvice = [];
+  extractionSource = 'client';
   prescriptionTextField.dispatchEvent(new Event('input'));
   speechStatus.textContent = '';
   document.getElementById('prescriptionPatientSummary').textContent =
@@ -316,6 +977,13 @@ function beginNewPrescription() {
   generateBtn.textContent = 'Save visit and generate PDF';
   generateBtn.disabled = true;
   recordSpeechBtn.disabled = false;
+  
+  // Clear preview
+  const preview = document.getElementById('structuredPrescriptionPreview');
+  if (preview) {
+    preview.innerHTML = '<p class="preview-title">Structured medicine preview</p><div class="preview-empty">No medicine details detected yet. Speak or type a prescription to preview it here.</div>';
+  }
+  
   document.getElementById('prescriptionWorkflow').scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
@@ -398,32 +1066,34 @@ if (updatePatientMobileBtn) {
   });
 }
 
-const viewPatientHistoryBtn = document.getElementById('viewPatientHistoryBtn');
-if (viewPatientHistoryBtn) {
-  viewPatientHistoryBtn.addEventListener('click', () => {
-    const panel = document.getElementById('patientHistoryPanel');
-    panel.hidden = !panel.hidden;
-    viewPatientHistoryBtn.textContent = panel.hidden
-      ? 'View previous prescriptions'
-      : 'Hide previous prescriptions';
+if (isBrowser) {
+  const viewPatientHistoryBtn = document.getElementById('viewPatientHistoryBtn');
+  if (viewPatientHistoryBtn) {
+    viewPatientHistoryBtn.addEventListener('click', () => {
+      const panel = document.getElementById('patientHistoryPanel');
+      panel.hidden = !panel.hidden;
+      viewPatientHistoryBtn.textContent = panel.hidden
+        ? 'View previous prescriptions'
+        : 'Hide previous prescriptions';
+    });
+  }
+
+  const startPrescriptionBtn = document.getElementById('startPrescriptionBtn');
+  if (startPrescriptionBtn) startPrescriptionBtn.addEventListener('click', beginNewPrescription);
+  const closePrescriptionBtn = document.getElementById('closePrescriptionBtn');
+  if (closePrescriptionBtn) closePrescriptionBtn.addEventListener('click', () => {
+    document.getElementById('prescriptionWorkflow').hidden = true;
   });
+  const clearSelectedPatientBtn = document.getElementById('clearSelectedPatientBtn');
+  if (clearSelectedPatientBtn) clearSelectedPatientBtn.addEventListener('click', () => {
+    selectedPatient = null;
+    selectedPatientVisits = [];
+    document.getElementById('selectedPatientPanel').hidden = true;
+    document.getElementById('prescriptionWorkflow').hidden = true;
+  });
+
+  if (recordSpeechBtn) recordSpeechBtn.addEventListener('click', toggleSpeechRecognition);
 }
-
-const startPrescriptionBtn = document.getElementById('startPrescriptionBtn');
-if (startPrescriptionBtn) startPrescriptionBtn.addEventListener('click', beginNewPrescription);
-const closePrescriptionBtn = document.getElementById('closePrescriptionBtn');
-if (closePrescriptionBtn) closePrescriptionBtn.addEventListener('click', () => {
-  document.getElementById('prescriptionWorkflow').hidden = true;
-});
-const clearSelectedPatientBtn = document.getElementById('clearSelectedPatientBtn');
-if (clearSelectedPatientBtn) clearSelectedPatientBtn.addEventListener('click', () => {
-  selectedPatient = null;
-  selectedPatientVisits = [];
-  document.getElementById('selectedPatientPanel').hidden = true;
-  document.getElementById('prescriptionWorkflow').hidden = true;
-});
-
-if (recordSpeechBtn) recordSpeechBtn.addEventListener('click', toggleSpeechRecognition);
 
 function showError(message) {
   output.innerHTML = `<div class="error" style="background: #fee; color: #c33; padding: 15px; border-radius: 8px; margin: 10px 0;">
@@ -431,73 +1101,483 @@ function showError(message) {
   </div>`;
 }
 
+function setSpeechStatus(message) {
+  if (speechStatus) {
+    speechStatus.textContent = message;
+  }
+}
+
+function resetRecognitionState() {
+  finalTranscript = '';
+  interimTranscript = '';
+  recognitionResultKeys = new Set();
+}
+
+function finalizeTranscriptToField() {
+  const field = document.getElementById('prescriptionText');
+  if (!field) return;
+  field.value = normalizeTranscriptText(finalTranscript);
+  field.dispatchEvent(new Event('input'));
+}
+
+function syncSpeechPreview() {
+  const field = document.getElementById('prescriptionText');
+  if (!field) return;
+  const previewValue = buildLiveTranscript(finalTranscript, interimTranscript);
+  field.value = previewValue;
+  field.dispatchEvent(new Event('input'));
+}
+
+function stopMicrophoneCapture() {
+  if (silenceTimer) {
+    clearTimeout(silenceTimer);
+    silenceTimer = null;
+  }
+  if (vadAnimationFrame) {
+    cancelAnimationFrame(vadAnimationFrame);
+    vadAnimationFrame = null;
+  }
+  if (micStream) {
+    micStream.getTracks().forEach(track => track.stop());
+    micStream = null;
+  }
+  if (audioContext && audioContext.state !== 'closed') {
+    audioContext.close().catch(() => {});
+  }
+  audioContext = null;
+  analyserNode = null;
+  silenceStartedAt = null;
+  lastAudioLevel = 0;
+}
+
+function startVADMonitor() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    setSpeechStatus('Microphone permission denied.');
+    return false;
+  }
+
+  navigator.mediaDevices.getUserMedia({ audio: true })
+    .then((stream) => {
+      micStream = stream;
+      audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      analyserNode = audioContext.createAnalyser();
+      analyserNode.fftSize = 2048;
+      analyserNode.smoothingTimeConstant = speechConfig.smoothingTimeConstant;
+
+      const source = audioContext.createMediaStreamSource(stream);
+      source.connect(analyserNode);
+
+      let lastStatusUpdate = 0;
+
+      function monitorAudio() {
+        if (!recordingActive) {
+          // Stop monitoring if recording is no longer active
+          return;
+        }
+        
+        const currentLevel = getAudioLevel(analyserNode);
+        lastAudioLevel = currentLevel;
+
+        const hasVoice = currentLevel > speechConfig.voiceThreshold;
+        
+        if (hasVoice) {
+          // Voice detected via audio level
+          lastSpeechDetectedAt = Date.now();
+          hasDetectedSpeech = true;
+          
+          // Cancel any pending silence timer
+          if (silenceTimer && recordingActive) {
+            clearTimeout(silenceTimer);
+            silenceTimer = null;
+            silenceStartedAt = null;
+            
+            const now = Date.now();
+            if (now - lastStatusUpdate > 500) {
+              setSpeechStatus('🎤 Recording... Continue speaking.');
+              lastStatusUpdate = now;
+            }
+          }
+        }
+        
+        // VAD monitoring is now passive - it doesn't trigger auto-stop
+        // The speech recognition API events (onspeechend) handle stopping
+        
+        vadAnimationFrame = requestAnimationFrame(monitorAudio);
+      }
+
+      vadAnimationFrame = requestAnimationFrame(monitorAudio);
+      console.log('[VAD] Audio monitoring started');
+    })
+    .catch((error) => {
+      console.error('[VAD] Microphone access error:', error);
+      setSpeechStatus('Microphone permission denied. Please allow microphone access.');
+      if (recordSpeechBtn) {
+        recordSpeechBtn.textContent = 'Record Prescription';
+      }
+      recordingActive = false;
+    });
+  return true;
+}
+
 function initializeSpeechRecognition() {
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (!SpeechRecognition) {
-    speechStatus.textContent = 'Speech recognition is not supported in this browser. Please use Chrome or Edge.';
-    recordSpeechBtn.disabled = true;
+    setSpeechStatus('Speech recognition is not supported in this browser. Please use Chrome or Edge.');
+    if (recordSpeechBtn) recordSpeechBtn.disabled = true;
     return;
   }
 
   recognition = new SpeechRecognition();
   recognition.lang = 'en-US';
-  recognition.interimResults = false;
+  recognition.continuous = true; // Keep listening continuously
+  recognition.interimResults = true; // Get interim results for live feedback
   recognition.maxAlternatives = 1;
 
   recognition.onstart = () => {
     recognizing = true;
-    speechStatus.textContent = '🎤 Listening... speak clearly into your microphone.';
-    recordSpeechBtn.textContent = '⏹️ Stop Recording';
+    console.log('[Recognition] Started');
+    if (recordingActive) {
+      setSpeechStatus('🎤 Recording... Speak naturally. Recording will finish 3 seconds after you stop speaking.');
+    }
+    if (recordSpeechBtn) recordSpeechBtn.textContent = 'Stop Recording';
   };
 
   recognition.onresult = (event) => {
-    const transcript = Array.from(event.results)
-      .map(result => result[0].transcript)
-      .join(' ');
+    console.log('[Recognition] Result received', event);
+    
+    // Mark that we've received speech recognition results
+    speechActivityDetected = true;
+    lastSpeechDetectedAt = Date.now();
+    hasDetectedSpeech = true;
+    
+    // Reset silence timer when new speech is recognized
+    if (recordingActive && silenceTimer) {
+      clearTimeout(silenceTimer);
+      silenceTimer = null;
+      silenceStartedAt = null;
+      setSpeechStatus('🎤 Recording... Continue speaking.');
+    }
+    
+    let latestInterim = '';
+    let newFinalText = '';
+    
+    for (let index = event.resultIndex; index < event.results.length; index += 1) {
+      const result = event.results[index];
+      const transcript = normalizeTranscriptText(result[0].transcript);
+      if (!transcript) continue;
 
-    if (transcript) {
-      // Append speech recognition output to the prescription transcript.
-      const prescriptionField = document.getElementById('prescriptionText');
-
-      if (prescriptionField) {
-          prescriptionField.value +=
-              (prescriptionField.value ? '\n' : '') + transcript.trim();
-          prescriptionField.dispatchEvent(new Event('input'));
+      if (result.isFinal) {
+        // Create unique key to prevent duplicates
+        const resultKey = `${recognitionSessionToken}:${index}:${transcript.toLowerCase()}`;
+        if (recognitionResultKeys.has(resultKey)) {
+          console.log('[Recognition] Duplicate final result, skipping:', transcript);
+          continue;
+        }
+        recognitionResultKeys.add(resultKey);
+        newFinalText = appendTranscriptSegment(newFinalText, transcript);
+        console.log('[Recognition] Final result:', transcript);
+      } else {
+        latestInterim = transcript;
       }
+    }
+    
+    // Accumulate final results without overwriting previous ones
+    if (newFinalText) {
+      finalTranscript = appendTranscriptSegment(finalTranscript, newFinalText);
+      console.log('[Recognition] Accumulated final transcript length:', finalTranscript.length);
+    }
 
-      speechStatus.textContent = '✅ Speech captured successfully.';
+    interimTranscript = latestInterim;
+    
+    if (finalTranscript || interimTranscript) {
+      syncSpeechPreview();
+    }
+  };
+  
+  recognition.onspeechstart = () => {
+    console.log('[Recognition] Speech started (onspeechstart)');
+    speechActivityDetected = true;
+    lastSpeechDetectedAt = Date.now();
+    hasDetectedSpeech = true;
+    
+    // Cancel any pending silence timer
+    if (silenceTimer) {
+      clearTimeout(silenceTimer);
+      silenceTimer = null;
+      silenceStartedAt = null;
+    }
+    
+    if (recordingActive) {
+      setSpeechStatus('🎤 Recording... Continue speaking.');
+    }
+  };
+  
+  recognition.onspeechend = () => {
+    console.log('[Recognition] Speech ended (onspeechend)');
+    
+    // Start silence timer only if recording is still active and speech has been detected
+    if (recordingActive && hasDetectedSpeech && !silenceTimer) {
+      silenceStartedAt = Date.now();
+      setSpeechStatus('⏸️ Waiting for 3 seconds of silence...');
+      
+      silenceTimer = setTimeout(() => {
+        console.log('[Recognition] 3 seconds of silence elapsed, auto-stopping');
+        if (recordingActive) {
+          stopRecording({ autoStop: true });
+        }
+      }, speechConfig.silenceDurationMs);
     }
   };
 
   recognition.onerror = (event) => {
-    speechStatus.textContent = `❌ Speech recognition error: ${event.error}`;
+    console.error('[Recognition] Error:', event.error);
+    
+    // Handle different error types
+    if (event.error === 'no-speech') {
+      setSpeechStatus('No speech detected. Please try again.');
+    } else if (event.error === 'audio-capture') {
+      setSpeechStatus('Microphone error. Please check your microphone.');
+      recordingActive = false;
+      stopMicrophoneCapture();
+    } else if (event.error === 'not-allowed') {
+      setSpeechStatus('Microphone permission denied. Please allow microphone access.');
+      recordingActive = false;
+      stopMicrophoneCapture();
+    } else if (event.error === 'aborted') {
+      // Aborted errors are usually intentional stops, ignore them
+      console.log('[Recognition] Recognition aborted (normal stop)');
+    } else {
+      setSpeechStatus(`Speech recognition error: ${event.error}`);
+    }
+    
+    // Don't automatically restart on critical errors
+    if (['audio-capture', 'not-allowed'].includes(event.error)) {
+      recordingActive = false;
+      if (recordSpeechBtn) {
+        recordSpeechBtn.textContent = 'Record Prescription';
+        recordSpeechBtn.disabled = false;
+      }
+    }
   };
 
   recognition.onend = () => {
+    console.log('[Recognition] Recognition ended, recognizing:', recognizing, 'recordingActive:', recordingActive);
     recognizing = false;
-    recordSpeechBtn.textContent = 'Record Prescription';
-    if (!speechStatus.textContent.includes('captured')) {
-      speechStatus.textContent = '🛑 Recording stopped. Press the button again to try again.';
+    
+    // CRITICAL: Check if recording should continue
+    if (recordingActive && !silenceTimer) {
+      // Browser stopped recognition but doctor hasn't finished
+      // Check if we should restart
+      const timeSinceLastSpeech = Date.now() - (lastSpeechDetectedAt || 0);
+      const shouldRestart = timeSinceLastSpeech < speechConfig.silenceDurationMs;
+      
+      if (shouldRestart) {
+        console.log('[Recognition] Auto-restarting recognition (continuous recording)');
+        setSpeechStatus('🎤 Recording... (continuing)');
+        
+        // Restart recognition after brief delay
+        setTimeout(() => {
+          if (recordingActive && recognition) {
+            try {
+              recognition.start();
+            } catch (error) {
+              console.warn('[Recognition] Restart error:', error);
+              // If start fails, try again after longer delay
+              setTimeout(() => {
+                if (recordingActive && recognition) {
+                  try {
+                    recognition.start();
+                  } catch (e) {
+                    console.error('[Recognition] Failed to restart:', e);
+                    recordingActive = false;
+                    finalizeRecording();
+                  }
+                }
+              }, 500);
+            }
+          }
+        }, speechConfig.autoRestartDelay);
+        return;
+      }
+    }
+    
+    // Recording is done
+    if (!recordingActive || silenceTimer) {
+      console.log('[Recognition] Recording completed, finalizing');
+      finalizeRecording();
     }
   };
+}
+
+function finalizeRecording() {
+  console.log('[Finalize] Finalizing recording, final transcript length:', finalTranscript.length);
+  
+  recordingActive = false;
+  recognizing = false;
+  
+  // Clear any pending timers
+  if (silenceTimer) {
+    clearTimeout(silenceTimer);
+    silenceTimer = null;
+  }
+  
+  // Stop microphone
+  stopMicrophoneCapture();
+  
+  // Update UI
+  if (recordSpeechBtn) {
+    recordSpeechBtn.textContent = 'Record Prescription';
+    recordSpeechBtn.disabled = false;
+  }
+  
+  // Process transcript
+  if (finalTranscript && finalTranscript.trim()) {
+    console.log('[Finalize] Processing final transcript:', finalTranscript);
+    finalizeTranscriptToField();
+    setSpeechStatus('✅ Recording completed. Processing prescription...');
+  } else if (interimTranscript && interimTranscript.trim()) {
+    // If we have interim but no final, use interim
+    console.log('[Finalize] Using interim transcript:', interimTranscript);
+    finalTranscript = interimTranscript;
+    finalizeTranscriptToField();
+    setSpeechStatus('✅ Recording completed. Processing prescription...');
+  } else {
+    setSpeechStatus('No speech detected. Please try recording again.');
+  }
+}
+
+function startRecording() {
+  console.log('[Start] Starting recording');
+  
+  // Set recording flag FIRST
+  recordingActive = true;
+  
+  // Reset state
+  recognitionSessionToken += 1;
+  finalTranscript = '';
+  interimTranscript = '';
+  recognitionResultKeys = new Set();
+  hasDetectedSpeech = false;
+  speechActivityDetected = false;
+  lastSpeechDetectedAt = null;
+  silenceStartedAt = null;
+  
+  // Clear any pending timers
+  if (silenceTimer) {
+    clearTimeout(silenceTimer);
+    silenceTimer = null;
+  }
+
+  if (!recognition) {
+    initializeSpeechRecognition();
+  }
+
+  if (!recognition) {
+    setSpeechStatus('Speech recognition could not be initialized.');
+    recordingActive = false;
+    return;
+  }
+
+  // Don't start if already running
+  if (recognizing) {
+    console.log('[Start] Already recognizing, skipping');
+    return;
+  }
+
+  setSpeechStatus('🎤 Recording... Speak naturally. Recording will finish 3 seconds after you stop speaking.');
+
+  try {
+    recognition.start();
+    console.log('[Start] Recognition start() called');
+  } catch (error) {
+    console.warn('[Start] Speech recognition start error:', error);
+    // If already started, that's OK
+    if (error.message && error.message.includes('already started')) {
+      console.log('[Start] Recognition already started, continuing');
+    } else {
+      setSpeechStatus('Failed to start recording. Please try again.');
+      recordingActive = false;
+      return;
+    }
+  }
+
+  // Start VAD monitoring for additional silence detection
+  startVADMonitor();
+}
+
+function stopRecording({ autoStop = false } = {}) {
+  console.log('[Stop] Stopping recording, autoStop:', autoStop);
+  
+  // Prevent multiple simultaneous stop calls
+  if (stopRecording.inProgress) {
+    console.log('[Stop] Stop already in progress');
+    return;
+  }
+  
+  if (!recordingActive && !recognizing) {
+    console.log('[Stop] Not recording, nothing to stop');
+    return;
+  }
+  
+  stopRecording.inProgress = true;
+
+  // Clear recording flag to prevent auto-restart
+  recordingActive = false;
+
+  if (autoStop) {
+    setSpeechStatus('⏸️ Silence detected – stopping...');
+  } else {
+    setSpeechStatus('🛑 Stopping recording...');
+  }
+  
+  // Clear any pending silence timer
+  if (silenceTimer) {
+    clearTimeout(silenceTimer);
+    silenceTimer = null;
+  }
+
+  // Stop microphone monitoring
+  stopMicrophoneCapture();
+
+  // Stop recognition if it's running
+  if (recognition && recognizing) {
+    try {
+      recognition.stop();
+      console.log('[Stop] Recognition stop() called');
+    } catch (error) {
+      console.warn('[Stop] Error stopping recognition:', error);
+    }
+  } else {
+    // If recognition already stopped, finalize immediately
+    finalizeRecording();
+  }
+
+  // Reset flag after a short delay
+  setTimeout(() => {
+    stopRecording.inProgress = false;
+  }, 500);
 }
 
 function toggleSpeechRecognition() {
   if (!recognition) {
     initializeSpeechRecognition();
-    if (!recognition) return;
   }
 
+  // Prevent rapid clicks
+  if (toggleSpeechRecognition.debounce) {
+    return;
+  }
+  toggleSpeechRecognition.debounce = true;
+  setTimeout(() => {
+    toggleSpeechRecognition.debounce = false;
+  }, 300);
+
   if (recognizing) {
-    recognition.stop();
+    stopRecording({ autoStop: false });
     return;
   }
 
-  try {
-    recognition.start();
-  } catch (err) {
-    speechStatus.textContent = `❌ Could not start speech recognition: ${err.message}`;
-  }
+  startRecording();
 }
 
 function renderResults(results) {
@@ -773,86 +1853,97 @@ function formatSection(title, items, sectionClass, emptyMessage, labels) {
 }
 
 function escapeHtml(text) {
+  const value = String(text ?? '');
+  if (typeof document === 'undefined') {
+    return value
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;');
+  }
   const div = document.createElement('div');
-  div.textContent = text;
+  div.textContent = value;
   return div.innerHTML;
 }
 
-// Add loading indicator styles if not already present
-if (!document.querySelector('#loading-style')) {
-  const style = document.createElement('style');
-  style.id = 'loading-style';
-  style.textContent = `
-    #loading {
-      display: none;
-      text-align: center;
-      padding: 20px;
-      margin: 20px 0;
-    }
-    
-    .spinner {
-      border: 3px solid #f3f3f3;
-      border-top: 3px solid #4CAF50;
-      border-radius: 50%;
-      width: 40px;
-      height: 40px;
-      animation: spin 1s linear infinite;
-      margin: 0 auto;
-    }
-    
-    @keyframes spin {
-      0% { transform: rotate(0deg); }
-      100% { transform: rotate(360deg); }
-    }
-    
-    .error {
-      background: #fee;
-      color: #c33;
-      padding: 15px;
-      border-radius: 8px;
-      margin: 10px 0;
-      border-left: 4px solid #c33;
-    }
-    
-    .medicine-card {
-      animation: fadeIn 0.3s ease-in;
-    }
-    
-    @keyframes fadeIn {
-      from {
-        opacity: 0;
-        transform: translateY(10px);
+if (isBrowser) {
+  // Add loading indicator styles if not already present
+  if (!document.querySelector('#loading-style')) {
+    const style = document.createElement('style');
+    style.id = 'loading-style';
+    style.textContent = `
+      #loading {
+        display: none;
+        text-align: center;
+        padding: 20px;
+        margin: 20px 0;
       }
-      to {
-        opacity: 1;
-        transform: translateY(0);
+      
+      .spinner {
+        border: 3px solid #f3f3f3;
+        border-top: 3px solid #4CAF50;
+        border-radius: 50%;
+        width: 40px;
+        height: 40px;
+        animation: spin 1s linear infinite;
+        margin: 0 auto;
       }
-    }
-  `;
-  document.head.appendChild(style);
-}
-
-// Keep all page navigation on one delegated click handler.
-const pageSections = Array.from(document.querySelectorAll('.page-section'));
-const navigationItems = Array.from(document.querySelectorAll('.nav-item'));
-
-function showPageSection(sectionId) {
-  const section = document.getElementById(sectionId);
-  if (!section || !section.classList.contains('page-section')) {
-    console.error(`Navigation target "${sectionId}" is not a page section.`);
-    return false;
+      
+      @keyframes spin {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+      }
+      
+      .error {
+        background: #fee;
+        color: #c33;
+        padding: 15px;
+        border-radius: 8px;
+        margin: 10px 0;
+        border-left: 4px solid #c33;
+      }
+      
+      .medicine-card {
+        animation: fadeIn 0.3s ease-in;
+      }
+      
+      @keyframes fadeIn {
+        from {
+          opacity: 0;
+          transform: translateY(10px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+    `;
+    document.head.appendChild(style);
   }
 
-  pageSections.forEach(pageSection => {
-    pageSection.classList.toggle('active-section', pageSection === section);
-  });
+  // Keep all page navigation on one delegated click handler.
+  const pageSections = Array.from(document.querySelectorAll('.page-section'));
+  const navigationItems = Array.from(document.querySelectorAll('.nav-item'));
 
-  navigationItems.forEach(item => {
-    item.classList.toggle('active', item.dataset.section === sectionId);
-  });
+  function showPageSection(sectionId) {
+    const section = document.getElementById(sectionId);
+    if (!section || !section.classList.contains('page-section')) {
+      console.error(`Navigation target "${sectionId}" is not a page section.`);
+      return false;
+    }
 
-  section.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  return true;
+    pageSections.forEach(pageSection => {
+      pageSection.classList.toggle('active-section', pageSection === section);
+    });
+
+    navigationItems.forEach(item => {
+      item.classList.toggle('active', item.dataset.section === sectionId);
+    });
+
+    section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    return true;
+  }
 }
 
 const initialSection = document.documentElement.dataset.initialSection;
@@ -1162,3 +2253,140 @@ if (editExtractedFieldsBtn) editExtractedFieldsBtn.addEventListener('click', () 
   staffUpdateStatus.textContent = 'Edit the extracted details, then save the medicine.';
 });
 if (inventoryRefreshBtn) inventoryRefreshBtn.addEventListener('click', loadInventory);
+
+// ═══════════════════════════════════════════════════════════════
+// WhatsApp Click-to-Chat Integration
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Normalize Indian mobile number for WhatsApp
+ * Handles formats: 9876543210, +91 9876543210, 919876543210
+ * Returns: 919876543210 (without + prefix for wa.me URL)
+ */
+function normalizePhoneForWhatsApp(phoneNumber) {
+  if (!phoneNumber || typeof phoneNumber !== 'string') {
+    throw new Error('Invalid phone number provided.');
+  }
+
+  // Remove all spaces, hyphens, brackets
+  let cleaned = phoneNumber.trim().replace(/[\s\-\(\)]/g, '');
+  
+  // Remove leading + if present
+  if (cleaned.startsWith('+')) {
+    cleaned = cleaned.substring(1);
+  }
+  
+  // If it already starts with 91 and has 12 digits, use as is
+  if (cleaned.startsWith('91') && cleaned.length === 12) {
+    return cleaned;
+  }
+  
+  // If it's a 10-digit number, add country code 91
+  if (cleaned.length === 10 && /^\d{10}$/.test(cleaned)) {
+    return '91' + cleaned;
+  }
+  
+  // If it already starts with 91, validate it has correct length
+  if (cleaned.startsWith('91')) {
+    const number = cleaned.substring(2);
+    if (number.length === 10 && /^\d{10}$/.test(number)) {
+      return cleaned;
+    }
+  }
+  
+  throw new Error('Invalid Indian mobile number. Please use a valid 10-digit number.');
+}
+
+/**
+ * Generate WhatsApp Click-to-Chat URL
+ */
+function generateWhatsAppURL(phoneNumber, message) {
+  const normalizedPhone = normalizePhoneForWhatsApp(phoneNumber);
+  const encodedMessage = encodeURIComponent(message);
+  return `https://wa.me/${normalizedPhone}?text=${encodedMessage}`;
+}
+
+/**
+ * Get clinic name from the page or use default
+ */
+function getClinicName() {
+  // Try to find clinic name from the page, otherwise use default
+  return 'Shri XYZ Clinic';
+}
+
+/**
+ * Handle WhatsApp share button click
+ */
+function handleWhatsAppShare(event) {
+  const button = event.currentTarget;
+  
+  // Prevent multiple clicks
+  if (button.disabled) {
+    return;
+  }
+  
+  const patientName = button.dataset.patientName;
+  const phoneNumber = button.dataset.phone;
+  const visitId = button.dataset.visitId;
+  
+  if (!phoneNumber) {
+    alert('Patient mobile number is not available. Cannot send via WhatsApp.');
+    return;
+  }
+  
+  // Validate phone number before proceeding
+  try {
+    normalizePhoneForWhatsApp(phoneNumber);
+  } catch (error) {
+    alert(`Invalid phone number: ${error.message}\n\nPlease update the patient's mobile number and try again.`);
+    return;
+  }
+  
+  // Show consent confirmation dialog
+  const clinicName = getClinicName();
+  const consentMessage = `Before sending the prescription via WhatsApp:\n\n` +
+    `Has ${patientName} agreed to receive their prescription through WhatsApp?\n\n` +
+    `Note: You will need to manually download and attach the PDF in WhatsApp.`;
+  
+  const consent = confirm(consentMessage);
+  
+  if (!consent) {
+    return;
+  }
+  
+  // Prepare WhatsApp message
+  const message = `Hello,\n\n` +
+    `Your prescription document from ${clinicName} is ready.\n\n` +
+    `Please find your prescription PDF attached to this message.\n\n` +
+    `For any clarification, please contact the clinic.\n\n` +
+    `Thank you.\n\n` +
+    `${clinicName}`;
+  
+  try {
+    // Generate WhatsApp URL
+    const whatsappURL = generateWhatsAppURL(phoneNumber, message);
+    
+    // Disable button temporarily to prevent multiple clicks
+    button.disabled = true;
+    button.textContent = 'Opening WhatsApp...';
+    
+    // Open WhatsApp in new window
+    // Using window.open ensures it's a user-initiated action (avoids popup blockers)
+    const whatsappWindow = window.open(whatsappURL, '_blank', 'noopener,noreferrer');
+    
+    if (!whatsappWindow) {
+      alert('Popup was blocked. Please allow popups for this site and try again.');
+    }
+    
+    // Re-enable button after a short delay
+    setTimeout(() => {
+      button.disabled = false;
+      button.textContent = 'Send Prescription via WhatsApp';
+    }, 3000);
+    
+  } catch (error) {
+    alert(`Failed to open WhatsApp: ${error.message}`);
+    button.disabled = false;
+    button.textContent = 'Send Prescription via WhatsApp';
+  }
+}

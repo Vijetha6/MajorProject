@@ -109,7 +109,7 @@ else:
     if not GEMINI_API_KEY:
         raise ValueError("GEMINI_API_KEY not found in .env")
     client = genai.Client(api_key=GEMINI_API_KEY)
-    print("✅ Gemini Loaded")
+    print("Gemini Loaded")
 
 
 # Set up logging
@@ -338,144 +338,499 @@ def word_to_number(text):
     return " ".join(converted)
 
 
-def parse_prescription(text):
+def normalize_duration_value(value):
+    if not value:
+        return "As directed"
+    value = value.strip().lower()
+    replacements = {
+        "one": "1",
+        "two": "2",
+        "three": "3",
+        "four": "4",
+        "five": "5",
+        "six": "6",
+        "seven": "7",
+        "eight": "8",
+        "nine": "9",
+        "ten": "10",
+    }
+    for word, number in replacements.items():
+        value = re.sub(rf"\b{word}\b", number, value)
+    value = re.sub(r"\s+", " ", value)
+    value = value.replace("day ", "day ")
+    return value
 
-    text = clean_prescription_text(word_to_number(text))
 
-    # Prescription text now contains ONLY medicines (no patient details)
-    prescription = text
+def extract_timing_values(text):
+    timing = []
+    for slot in ["Morning", "Afternoon", "Evening", "Bedtime"]:
+        if re.search(rf"\b{slot.lower()}\b", text, re.IGNORECASE):
+            timing.append(slot)
+    return timing
 
-    # Split every medicine separately
-    medicine_lines = [
-        x.strip()
-        for x in re.split(r'[\n\.]+', prescription)
-        if x.strip()
+
+def is_likely_medicine_name(text):
+    """Check if text is likely a medicine name vs conversation/advice"""
+    if not text or len(text.strip()) < 2:
+        return False
+    
+    text_lower = text.lower().strip()
+    
+    # Exclude common conversation phrases
+    conversation_phrases = [
+        'hello', 'hi', 'doctor speaking', 'i am', 'the patient', 'should', 
+        'take', 'adequate', 'rest', 'drink', 'water', 'plenty', 'recording',
+        'completed', 'prescribe', 'also prescribe', 'for the patient',
+        'good morning', 'good afternoon', 'good evening', 'thank you',
+        'please', 'kindly', 'avoid', 'continue', 'stop', 'follow up'
     ]
+    
+    for phrase in conversation_phrases:
+        if phrase in text_lower:
+            return False
+    
+    # Exclude general advice patterns
+    advice_patterns = [
+        r'^(take|drink|avoid|continue|stop|get|do|don\'t)\s+',
+        r'\b(rest|water|exercise|sleep|diet|food)\b',
+        r'^(the patient|patient should|you should)',
+        r'(recording|transcript|completed|finished)'
+    ]
+    
+    for pattern in advice_patterns:
+        if re.search(pattern, text_lower):
+            return False
+    
+    # Check if it looks like a medicine name (contains known medicine or has medicine-like pattern)
+    known_medicine = any(med in text_lower for med in COMMON_MEDICINES)
+    has_dosage = bool(re.search(r'\d+\s*(?:mg|ml|mcg|g)\b', text_lower))
+    has_frequency = bool(re.search(r'\b(once|twice|thrice|daily|weekly)\b', text_lower))
+    
+    # If it has both a known medicine pattern and dosage/frequency info, likely a medicine
+    if known_medicine or (has_dosage and has_frequency):
+        return True
+    
+    # Check for medicine-like structure: word + number + unit
+    if re.search(r'^[A-Za-z]{3,}(?:in|ol|ne|zine|cillin|mycin|pam|lol|pine|pril|sartan|tide|mine|dine|lone)\b', text_lower):
+        return True
+    
+    return False
 
+
+def extract_medicines_from_voice_transcript(text):
+    """
+    Intelligently extract medicine prescriptions from voice transcript.
+    Separates actual medicines from conversation and general advice.
+    """
+    if not text:
+        return []
+    
+    text = clean_prescription_text(word_to_number(text))
+    
+    # Split by common separators but keep context
+    segments = re.split(r'(?:\.|\.|also prescribe|and prescribe|prescribe)\s+', text, flags=re.IGNORECASE)
+    
     medicines = []
-
-    for line in medicine_lines:
-
-        line_lower = line.lower()
-
-        # Medicine name
-        med_match = re.match(r'^([A-Za-z]+)', line)
-
-        if not med_match:
+    general_advice = []
+    
+    for segment in segments:
+        segment = segment.strip()
+        if not segment or len(segment) < 5:
             continue
-
-        medicine = med_match.group(1).title()
-
-        # ---------------- Dosage ----------------
-
-        dosage = "As directed"
-        dosage_text = re.sub(
-            r'\bfor\s+\d+\s+(?:day|days|week|weeks|month|months)\b.*$',
-            '',
-            line_lower
+        
+        segment_lower = segment.lower()
+        
+        # Check if this segment contains medicine-like information
+        has_medicine_indicator = (
+            any(med in segment_lower for med in COMMON_MEDICINES) or
+            re.search(r'\d+\s*(?:mg|ml|mcg|g)\b', segment_lower) or
+            re.search(r'\b(tablet|capsule|syrup|injection)\b', segment_lower)
         )
-        dosage_text = re.sub(
-            r'\b(?:once|twice|thrice)\s+(?:daily|a day|per day|weekly|a week|per week)\b',
-            '',
-            dosage_text
+        
+        # Check if it's general advice
+        is_advice = (
+            re.search(r'^(take|drink|avoid|get|do)\s+(adequate|plenty|rest|water|exercise)', segment_lower) or
+            re.search(r'(should rest|should drink|should avoid|should take care)', segment_lower) or
+            'recording completed' in segment_lower or
+            'hello doctor' in segment_lower
         )
-        dosage_text = re.sub(
-            r'\b\d+\s*(?:times?\s+(?:daily|a day|per day)|per day)\b',
-            '',
-            dosage_text
+        
+        if is_advice:
+            general_advice.append(segment)
+            continue
+        
+        if not has_medicine_indicator:
+            continue
+        
+        # Extract medicine details from this segment
+        medicine_data = parse_medicine_segment(segment)
+        if medicine_data and is_likely_medicine_name(medicine_data['name']):
+            medicines.append(medicine_data)
+    
+    return medicines
+
+
+def parse_medicine_segment(segment):
+    """Parse a single segment that likely contains a medicine prescription"""
+    line = segment.strip()
+    line_lower = line.lower()
+    
+    # Extract medicine name - look for word before dosage or frequency
+    med_match = re.match(
+        r'^(?:prescribe\s+)?([A-Za-z][A-Za-z .()-]+?)(?=\s+(?:\d+(?:/\d+)?\s*(?:mg|ml|mcg|g)|once|twice|thrice|daily|weekly))',
+        line,
+        re.IGNORECASE
+    )
+    
+    if not med_match:
+        # Try to find known medicine names
+        for known_med in COMMON_MEDICINES:
+            if known_med in line_lower:
+                med_match = re.search(rf'\b({known_med})\b', line, re.IGNORECASE)
+                if med_match:
+                    break
+    
+    if not med_match:
+        return None
+    
+    medicine = med_match.group(1).strip()
+    
+    # Clean up medicine name
+    medicine = re.sub(r'\b(prescribe|prescribed|tablet|capsule|syrup)\b', '', medicine, flags=re.IGNORECASE).strip()
+    
+    if not medicine or len(medicine) < 2:
+        return None
+    
+    # Extract dosage
+    dosage_match = re.search(r'(\d+(?:/\d+)?\s*(?:mg|ml|mcg|g|milligram|milligrams|mill))', line, re.IGNORECASE)
+    dosage = dosage_match.group(1).strip() if dosage_match else "Dose not specified"
+    
+    # Normalize dosage
+    dosage = re.sub(r'\bmilligram(?:s)?\b', 'mg', dosage, flags=re.IGNORECASE)
+    dosage = re.sub(r'\bmill\b', 'mg', dosage, flags=re.IGNORECASE)
+    
+    # Extract frequency
+    frequency = "As directed"
+    if re.search(r'\b(?:once|1|one)\s+(?:daily|a day|per day|in a day)\b', line_lower):
+        frequency = "Once daily"
+    elif re.search(r'\b(?:twice|2|two)\s+(?:daily|a day|per day|in a day)\b', line_lower):
+        frequency = "Twice daily"
+    elif re.search(r'\b(?:thrice|3|three)\s+(?:daily|a day|per day|in a day)\b', line_lower):
+        frequency = "Thrice daily"
+    elif re.search(r'\b(?:four times|4 times)\s+(?:daily|a day|per day)\b', line_lower):
+        frequency = "Four times daily"
+    
+    # Extract duration
+    duration = "As directed"
+    dur_match = re.search(
+        r'for\s+((?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s*(?:day|days|week|weeks|month|months))',
+        line_lower
+    )
+    if dur_match:
+        duration = normalize_duration_value(dur_match.group(1))
+    
+    # Extract timing
+    timing = extract_timing_values(line)
+    
+    # Extract food instruction
+    food_instruction = ''
+    food_match = re.search(r'(after food|before food|with food|empty stomach|before meal|after meal)', line_lower)
+    if food_match:
+        food_instruction = food_match.group(1).strip().title()
+    
+    # Extract special instructions (excluding medicine name, dosage, frequency, etc.)
+    instructions = line
+    instructions = re.sub(rf'^{re.escape(medicine)}', '', instructions, flags=re.IGNORECASE)
+    instructions = re.sub(re.escape(dosage), '', instructions, flags=re.IGNORECASE)
+    instructions = re.sub(rf'\b{re.escape(frequency.lower())}\b', '', instructions, flags=re.IGNORECASE)
+    instructions = re.sub(r'\bfor\s+.*?\b(?:day|days|week|weeks|month|months)\b', '', instructions, flags=re.IGNORECASE)
+    instructions = re.sub(
+        r'\b(?:prescribe|prescribed|morning|afternoon|evening|bedtime|after food|before food|with food|empty stomach|take|tablet|tab|capsule|cap|daily|weekly)\b',
+        ' ',
+        instructions,
+        flags=re.IGNORECASE
+    )
+    instructions = re.sub(r'[\s,;:-]+', ' ', instructions).strip()
+    
+    if not instructions or len(instructions) < 3:
+        instructions = ''
+    
+    return {
+        "name": medicine.title(),
+        "dosage": dosage,
+        "frequency": frequency,
+        "duration": duration,
+        "timing": timing,
+        "food_instruction": food_instruction,
+        "special_instructions": instructions,
+        "instructions": instructions,
+    }
+
+
+def extract_prescription_with_gemini(prescription_text):
+    """
+    Use Gemini to intelligently extract structured medicine data from free-form prescription text.
+    Handles natural doctor speech patterns, multiple medicines, context across sentences,
+    corrections, and separates medicines from general advice.
+    
+    Returns:
+        dict: {
+            "medicines": [...],
+            "general_advice": [...],
+            "extraction_source": "gemini" or "fallback"
+        }
+    """
+    if not prescription_text or not prescription_text.strip():
+        return {
+            "medicines": [],
+            "general_advice": [],
+            "extraction_source": "fallback",
+            "error": "Empty prescription text"
+        }
+    
+    # Check if Gemini is available
+    if client is None or not GEMINI_API_KEY:
+        logger.warning("Gemini not available, using fallback parser")
+        fallback_medicines = extract_medicines_from_voice_transcript(prescription_text)
+        return {
+            "medicines": fallback_medicines,
+            "general_advice": [],
+            "extraction_source": "fallback",
+            "note": "Intelligent extraction unavailable. Using pattern-based fallback."
+        }
+    
+    # Prepare Gemini prompt for intelligent extraction
+    prompt = f"""You are a medical prescription extraction assistant. Your task is to extract structured medicine information from natural doctor speech or typed prescription text.
+
+PRESCRIPTION TEXT:
+{prescription_text}
+
+IMPORTANT INSTRUCTIONS:
+
+1. UNDERSTAND CONTEXT ACROSS SENTENCES:
+   - When a doctor says "Prescribe Paracetamol 500 mg. Take one tablet morning and evening. Continue for five days. After food."
+   - ALL these sentences refer to ONE medicine (Paracetamol).
+   - Do NOT create separate medicines for each sentence.
+   - Combine information from multiple sentences that refer to the same medicine.
+
+2. HANDLE CORRECTIONS:
+   - If the doctor says "for five days. Actually, make that three days", use THREE days (latest value).
+   - The most recent explicit correction overrides earlier values.
+
+3. DISTINGUISH MEDICINES FROM CONVERSATION:
+   - Extract ONLY actual medicine prescriptions.
+   - DO NOT treat these as medicines:
+     * Greetings: "Hello", "Good morning", "Doctor speaking"
+     * Closing statements: "Thank you", "That completes the prescription", "Recording completed"
+     * General advice: "Drink plenty of water", "Get adequate rest", "Maintain a healthy diet"
+     * Instructions without medicine: "Take adequate rest"
+
+4. GENERAL PATIENT ADVICE:
+   - Extract general health advice separately (not as medicines).
+   - Examples: "Drink plenty of water", "Get adequate rest", "Avoid spicy food"
+
+5. REQUIRED FIELDS FOR EACH MEDICINE:
+   {{
+     "name": "Medicine name (required)",
+     "dosage": "Strength with unit (e.g., 500 mg)",
+     "frequency": "How often (e.g., Once daily, Twice daily, As directed)",
+     "duration": "How long (e.g., 5 days, 1 week, As directed)",
+     "timing": ["Morning", "Afternoon", "Evening", "Bedtime"],
+     "food_instruction": "After food, Before food, With food, or empty string",
+     "special_instructions": "Any additional notes"
+   }}
+
+6. MEDICAL SAFETY RULES:
+   - NEVER invent medicine names, dosages, or durations.
+   - If information is missing or uncertain, use empty string "" or "As directed".
+   - NEVER assume frequency from timing alone (if only "morning" is mentioned, frequency is "As directed", not "once daily" unless explicitly stated).
+   - NEVER convert uncertain medicine names to different medicines.
+   - Extract only what is explicitly stated or strongly implied.
+
+7. TIMING VALUES:
+   - Use exactly these values: "Morning", "Afternoon", "Evening", "Bedtime"
+   - Return as a JSON array: ["Morning", "Evening"]
+
+8. FREQUENCY NORMALIZATION:
+   - "once a day", "one per day", "once daily" → "Once daily"
+   - "twice a day", "two per day", "twice daily" → "Twice daily"
+   - "thrice a day", "three times a day" → "Thrice daily"
+   - "four times a day" → "Four times daily"
+   - If not specified → "As directed"
+
+9. DURATION NORMALIZATION:
+   - Convert words to numbers: "five days" → "5 days"
+   - "one week" → "1 week"
+   - If not specified → "As directed"
+
+10. DOSAGE NORMALIZATION:
+    - "500 milligrams" → "500 mg"
+    - "10 milligram" → "10 mg"
+    - Keep format: number + space + unit (e.g., "500 mg", "10 ml")
+
+RESPONSE FORMAT:
+Return ONLY valid JSON in this exact structure:
+
+{{
+  "medicines": [
+    {{
+      "name": "Paracetamol",
+      "dosage": "500 mg",
+      "frequency": "Twice daily",
+      "duration": "5 days",
+      "timing": ["Morning", "Evening"],
+      "food_instruction": "After food",
+      "special_instructions": ""
+    }}
+  ],
+  "general_advice": [
+    "Drink plenty of water",
+    "Get adequate rest"
+  ]
+}}
+
+CRITICAL: Return ONLY the JSON object. No markdown code blocks, no explanations, no additional text.
+"""
+    
+    try:
+        response = client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=prompt
         )
+        
+        response_text = response.text
+        if not isinstance(response_text, str) or not response_text.strip():
+            logger.warning("Gemini returned empty response for prescription extraction")
+            fallback_medicines = extract_medicines_from_voice_transcript(prescription_text)
+            return {
+                "medicines": fallback_medicines,
+                "general_advice": [],
+                "extraction_source": "fallback",
+                "note": "Gemini returned empty response. Using fallback."
+            }
+        
+        # Clean response text
+        response_text = response_text.strip()
+        
+        # Remove markdown code blocks if present
+        if response_text.startswith("```"):
+            response_text = re.sub(r"^```(?:json)?\s*", "", response_text, flags=re.IGNORECASE)
+            response_text = re.sub(r"\s*```$", "", response_text)
+        
+        # Parse JSON
+        try:
+            data = json.loads(response_text)
+        except json.JSONDecodeError as e:
+            logger.warning(f"Gemini returned invalid JSON: {e}")
+            fallback_medicines = extract_medicines_from_voice_transcript(prescription_text)
+            return {
+                "medicines": fallback_medicines,
+                "general_advice": [],
+                "extraction_source": "fallback",
+                "note": "Invalid JSON from Gemini. Using fallback."
+            }
+        
+        # Validate structure
+        if not isinstance(data, dict):
+            logger.warning("Gemini returned non-dict JSON")
+            fallback_medicines = extract_medicines_from_voice_transcript(prescription_text)
+            return {
+                "medicines": fallback_medicines,
+                "general_advice": [],
+                "extraction_source": "fallback",
+                "note": "Invalid structure from Gemini. Using fallback."
+            }
+        
+        # Extract and validate medicines
+        medicines = data.get("medicines", [])
+        if not isinstance(medicines, list):
+            medicines = []
+        
+        # Validate and clean each medicine
+        validated_medicines = []
+        for med in medicines:
+            if not isinstance(med, dict):
+                continue
+            
+            name = str(med.get("name", "")).strip()
+            if not name or len(name) < 2:
+                continue
+            
+            # Skip if it's likely not a medicine (general advice mistaken as medicine)
+            if not is_likely_medicine_name(name):
+                continue
+            
+            dosage = str(med.get("dosage", "")).strip() or "Dose not specified"
+            frequency = str(med.get("frequency", "")).strip() or "As directed"
+            duration = str(med.get("duration", "")).strip() or "As directed"
+            food_instruction = str(med.get("food_instruction", "")).strip()
+            special_instructions = str(med.get("special_instructions", "")).strip()
+            
+            # Validate timing array
+            timing = med.get("timing", [])
+            if not isinstance(timing, list):
+                timing = []
+            
+            valid_timing_slots = {"Morning", "Afternoon", "Evening", "Bedtime"}
+            timing = [str(t).strip() for t in timing if str(t).strip() in valid_timing_slots]
+            
+            validated_medicines.append({
+                "name": name,
+                "dosage": dosage,
+                "frequency": frequency,
+                "duration": duration,
+                "timing": timing,
+                "food_instruction": food_instruction,
+                "special_instructions": special_instructions,
+                "instructions": special_instructions,
+            })
+        
+        # Extract general advice
+        general_advice = data.get("general_advice", [])
+        if not isinstance(general_advice, list):
+            general_advice = []
+        general_advice = [str(advice).strip() for advice in general_advice if isinstance(advice, str) and str(advice).strip()]
+        
+        # If no medicines extracted and text looks like it should have medicines, try fallback
+        if not validated_medicines and any(med in prescription_text.lower() for med in COMMON_MEDICINES):
+            logger.warning("Gemini extracted no medicines but text contains known medicine names. Using fallback.")
+            fallback_medicines = extract_medicines_from_voice_transcript(prescription_text)
+            return {
+                "medicines": fallback_medicines,
+                "general_advice": general_advice,
+                "extraction_source": "fallback",
+                "note": "Gemini extracted no medicines. Using fallback."
+            }
+        
+        return {
+            "medicines": validated_medicines,
+            "general_advice": general_advice,
+            "extraction_source": "gemini"
+        }
+        
+    except Exception as e:
+        logger.exception("Gemini prescription extraction failed")
+        fallback_medicines = extract_medicines_from_voice_transcript(prescription_text)
+        return {
+            "medicines": fallback_medicines,
+            "general_advice": [],
+            "extraction_source": "fallback",
+            "note": f"Gemini error: {str(e)}. Using fallback."
+        }
 
-        d = re.search(
-            r'(?<![A-Za-z0-9])(\d+(?:/\d+)?)\s*(mg|ml|mcg|g|tablet|tab|capsule|cap)?',
-            dosage_text
-        )
 
-        if d:
-            dosage = d.group(1)
-
-            if d.group(2):
-                dosage += " " + d.group(2)
-
-        # ---------------- Frequency ----------------
-
-        frequency = "As directed"
-
-        if ("once daily" in line_lower or
-            "once per day" in line_lower or
-            "once a day" in line_lower or
-            "1 per day" in line_lower):
-
-            frequency = "Once daily"
-
-        elif ("twice daily" in line_lower or
-              "twice a day" in line_lower or
-              "twice per day" in line_lower or
-              "2 per day" in line_lower):
-
-            frequency = "Twice daily"
-
-        elif ("thrice daily" in line_lower or
-              "thrice a day" in line_lower or
-              "3 per day" in line_lower):
-
-            frequency = "Thrice daily"
-
-        elif ("once weekly" in line_lower or
-              "once per week" in line_lower):
-
-            frequency = "Once weekly"
-
-        elif ("twice weekly" in line_lower or
-              "twice per week" in line_lower):
-
-            frequency = "Twice weekly"
-
-        # ---------------- Duration ----------------
-
-        duration = "As directed"
-
-        dur = re.search(
-            r'for\s+(\d+)\s+(days|day|weeks|week|months|month)',
-            line_lower
-        )
-
-        if dur:
-            duration = f"{dur.group(1)} {dur.group(2)}"
-
-        instructions = line_lower
-        instructions = re.sub(r'^[A-Za-z]+', '', instructions, count=1)
-        instructions = re.sub(
-            r'\b(?:once|twice|thrice)\s+(?:daily|a day|per day|weekly|a week|per week)\b',
-            ' ',
-            instructions,
-        )
-        instructions = re.sub(
-            r'\b\d+\s*(?:times?\s+(?:daily|a day|per day)|per day)\b',
-            ' ',
-            instructions,
-        )
-        instructions = re.sub(
-            r'\bfor\s+\d+\s+(?:day|days|week|weeks|month|months)\b',
-            ' ',
-            instructions,
-        )
-        instructions = re.sub(
-            r'(?<![A-Za-z0-9])\d+(?:/\d+)?\s*(?:mg|ml|mcg|g|tablet|tab|capsule|cap)?\b',
-            ' ',
-            instructions,
-            count=1,
-        )
-        instructions = re.sub(r'\b(?:take|please)\b', ' ', instructions)
-        instructions = re.sub(r'[\s,;:-]+', ' ', instructions).strip()
-
-        medicines.append({
-            "name": medicine,
-            "dosage": dosage,
-            "frequency": frequency,
-            "duration": duration,
-            "instructions": instructions,
-        })
-
+def parse_prescription(text):
+    """
+    Parse prescription text - use intelligent extraction for voice transcripts
+    """
+    # First try intelligent extraction with Gemini
+    extraction_result = extract_prescription_with_gemini(text)
+    medicines = extraction_result.get("medicines", [])
+    
+    # If no medicines found, try fallback
+    if not medicines:
+        medicines = extract_medicines_from_voice_transcript(text)
+    
     return {
         "name": "Patient",
         "age": "Not set",
@@ -496,263 +851,309 @@ def create_prescription_filename(patient_name, visit_id):
 
 
 def generate_prescription_pdf(data, download_url, filepath):
+    """
+    Generate professional prescription PDF matching reference design.
+    Features:
+    - Clean clinic header with centered alignment
+    - Two-column patient/doctor info layout
+    - Professional medicine table with proper spacing
+    - Separate food/special instructions (not mixed in medicine names)
+    - Digital signature and QR code
+    - Professional footer
+    """
     pdf = FPDF()
     pdf.add_page()
-    pdf.set_auto_page_break(False)
+    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.set_margins(15, 10, 15)
 
-    pdf.set_font('Arial', 'B', 14)
-    pdf.set_text_color(0, 0, 128)
-    pdf.cell(0, 6, 'XYZ CLINIC', 0, 1, 'C')
+    # Extract data
+    clinic_name = str(data.get('clinic') or data.get('clinic_name') or 'SHRI XYZ CLINIC')
+    clinic_tagline = str(data.get('clinic_tagline') or 'HEALTH IS WEALTH')
+    clinic_address = str(data.get('address') or 'xyzabc')
+    clinic_phone = str(data.get('phone') or data.get('clinic_phone') or '+91 **********')
+    clinic_email = str(data.get('email') or 'xyz@gmail.com')
+    
+    patient_name = str(data.get('name') or data.get('patient_name') or 'Patient')
+    patient_mobile = str(data.get('phone_number') or data.get('mobile_number') or '')
+    patient_age = str(data.get('age') or 'Not set')
+    patient_gender = str(data.get('gender') or 'Not set')
+    patient_id = str(data.get('patient_id') or '')
+    
+    doctor_name = str(data.get('doctor_name') or data.get('doctor') or 'Dr. XYZ')
+    if doctor_name and not doctor_name.lower().startswith('dr'):
+        doctor_name = f'Dr. {doctor_name}'
+    visit_id = str(data.get('visit_id') or '')
+    
+    today = datetime.now(doctor_db.INDIA_TIMEZONE).strftime('%d/%m/%Y')
+
+    # ═══════════════════════════════════════════════════════════════
+    # CLINIC HEADER (Centered)
+    # ═══════════════════════════════════════════════════════════════
+    pdf.set_font('Arial', 'B', 16)
+    pdf.set_text_color(0, 0, 0)
+    pdf.cell(0, 8, clinic_name.upper(), 0, 1, 'C')
+    
     pdf.set_font('Arial', '', 9)
-    pdf.set_text_color(0, 0, 0)
-    pdf.cell(0, 5, 'Serving Health Since 1990', 0, 1, 'C')
+    pdf.cell(0, 5, clinic_tagline.upper(), 0, 1, 'C')
+    
     pdf.set_font('Arial', '', 8)
-    pdf.cell(0, 4, data['address'], 0, 1, 'C')
-    pdf.cell(0, 4, f"Phone: {data['phone']} | Email: {data['email']}", 0, 1, "C")
+    pdf.cell(0, 4, clinic_address, 0, 1, 'C')
+    pdf.cell(0, 4, f"Phone: {clinic_phone} | Email: {clinic_email}", 0, 1, 'C')
+    
     pdf.ln(3)
-    # ===================== DATE =====================
-    pdf.set_font("Arial", "", 9)
-    pdf.set_xy(165, 28)
-    pdf.cell(
-        30,
-        6,
-        f"Date: {datetime.now(doctor_db.INDIA_TIMEZONE).strftime('%d/%m/%Y')}",
-        0,
-        0,
-        "R",
-    )
 
-    # ===================== DETAILS =====================
+    # ═══════════════════════════════════════════════════════════════
+    # PRESCRIPTION HEADING WITH DATE
+    # ═══════════════════════════════════════════════════════════════
+    pdf.set_font('Arial', 'B', 14)
+    pdf.cell(0, 7, 'PRESCRIPTION', 0, 1, 'C')
+    
+    # Date on the right side
+    pdf.set_font('Arial', '', 9)
+    pdf.set_xy(pdf.w - 55, pdf.get_y() - 7)
+    pdf.cell(40, 7, f'Date: {today}', 0, 0, 'R')
+    
+    pdf.ln(10)
 
-    left_x = 15
-    right_x = 110
+    # ═══════════════════════════════════════════════════════════════
+    # PATIENT & DOCTOR INFO (Two Columns)
+    # ═══════════════════════════════════════════════════════════════
+    info_start_y = pdf.get_y()
+    left_col_x = 15
+    right_col_x = 105
+    line_height = 6
+    
+    # LEFT COLUMN: Patient Info
+    pdf.set_xy(left_col_x, info_start_y)
+    pdf.set_font('Arial', 'B', 9)
+    pdf.cell(35, line_height, 'Patient Name:', 0, 0)
+    pdf.set_font('Arial', '', 9)
+    pdf.cell(55, line_height, patient_name, 0, 1)
+    
+    pdf.set_x(left_col_x)
+    pdf.set_font('Arial', 'B', 9)
+    pdf.cell(35, line_height, 'Mobile No:', 0, 0)
+    pdf.set_font('Arial', '', 9)
+    pdf.cell(55, line_height, patient_mobile, 0, 1)
+    
+    pdf.set_x(left_col_x)
+    pdf.set_font('Arial', 'B', 9)
+    pdf.cell(35, line_height, 'Age:', 0, 0)
+    pdf.set_font('Arial', '', 9)
+    pdf.cell(55, line_height, patient_age, 0, 1)
+    
+    pdf.set_x(left_col_x)
+    pdf.set_font('Arial', 'B', 9)
+    pdf.cell(35, line_height, 'Gender:', 0, 0)
+    pdf.set_font('Arial', '', 9)
+    pdf.cell(55, line_height, patient_gender, 0, 1)
+    
+    # RIGHT COLUMN: Doctor Info
+    pdf.set_xy(right_col_x, info_start_y)
+    pdf.set_font('Arial', 'B', 9)
+    pdf.cell(35, line_height, 'Doctor Name:', 0, 0)
+    pdf.set_font('Arial', '', 9)
+    pdf.cell(55, line_height, doctor_name, 0, 1)
+    
+    pdf.set_xy(right_col_x, info_start_y + line_height)
+    pdf.set_font('Arial', 'B', 9)
+    pdf.cell(35, line_height, 'Clinic:', 0, 0)
+    pdf.set_font('Arial', '', 9)
+    pdf.cell(55, line_height, clinic_name, 0, 1)
+    
+    pdf.set_xy(right_col_x, info_start_y + line_height * 2)
+    pdf.set_font('Arial', 'B', 9)
+    pdf.cell(35, line_height, 'Visit ID:', 0, 0)
+    pdf.set_font('Arial', '', 9)
+    pdf.cell(55, line_height, visit_id, 0, 1)
+    
+    if patient_id:
+        pdf.set_xy(right_col_x, info_start_y + line_height * 3)
+        pdf.set_font('Arial', 'B', 9)
+        pdf.cell(35, line_height, 'Patient ID:', 0, 0)
+        pdf.set_font('Arial', '', 9)
+        pdf.cell(55, line_height, patient_id, 0, 1)
+    
+    pdf.ln(8)
 
-    row1 = 42
-    row2 = 50
-    row3 = 58
-
-    label_w = 35
-    value_w = 50
-
-    # -------- LEFT SIDE --------
-    pdf.set_font("Arial", "B", 9)
-# Row positions
-    row1 = 42
-    row2 = 50
-    row3 = 58
-    row4 = 66
-    row5 = 74
-
-# -------- LEFT SIDE --------
-
-    # Patient Name
-    pdf.set_xy(left_x, row1)
-    pdf.set_font("Arial", "B", 9)
-    pdf.cell(label_w, 6, "Patient Name:", 0, 0)
-    pdf.set_font("Arial", "", 9)
-    pdf.cell(value_w, 6, data["name"], 0, 0)
-
-    # Mobile Number
-    pdf.set_xy(left_x, row2)
-    pdf.set_font("Arial", "B", 9)
-    pdf.cell(label_w, 6, "Mobile No:", 0, 0)
-    pdf.set_font("Arial", "", 9)
-    pdf.cell(value_w, 6, data["phone_number"], 0, 0)
-
-    # Age
-    pdf.set_xy(left_x, row3)
-    pdf.set_font("Arial", "B", 9)
-    pdf.cell(label_w, 6, "Age:", 0, 0)
-    pdf.set_font("Arial", "", 9)
-    pdf.cell(value_w, 6, data["age"], 0, 0)
-
-    # Gender
-    pdf.set_xy(left_x, row4)
-    pdf.set_font("Arial", "B", 9)
-    pdf.cell(label_w, 6, "Gender:", 0, 0)
-    pdf.set_font("Arial", "", 9)
-    pdf.cell(value_w, 6, data["gender"], 0, 0)
-
-    # Patient ID
-    pdf.set_xy(left_x, row5)
-    pdf.set_font("Arial", "B", 9)
-    pdf.cell(label_w, 6, "Patient ID:", 0, 0)
-    pdf.set_font("Arial", "", 9)
-    pdf.cell(value_w, 6, data["patient_id"], 0, 0)
-
-    # -------- RIGHT SIDE --------
-
-    # Doctor ID
-    pdf.set_xy(right_x, row1)
-    pdf.set_font("Arial", "B", 9)
-    pdf.cell(label_w, 6, "Doctor ID:", 0, 0)
-    pdf.set_font("Arial", "", 9)
-    pdf.cell(0, 6, data["doctor"], 0, 0)
-
-    # Clinic
-    pdf.set_xy(right_x, row2)
-    pdf.set_font("Arial", "B", 9)
-    pdf.cell(label_w, 6, "Clinic:", 0, 0)
-    pdf.set_font("Arial", "", 9)
-    pdf.cell(0, 6, data["clinic"], 0, 0)
-
-    # Visit ID
-    pdf.set_xy(right_x, row3)
-    pdf.set_font("Arial", "B", 9)
-    pdf.cell(label_w, 6, "Visit ID:", 0, 0)
-    pdf.set_font("Arial", "", 9)
-    pdf.cell(0, 6, data["visit_id"], 0, 0)
-
-    pdf.set_y(82)
-    pdf.set_font('Arial', 'B', 8)
-    pdf.set_fill_color(200, 220, 240)
-
-    # ── Four-column layout matching the printed prescription format ──
-    col_w = [52, 35, 50, 43]
-    headers = ['Medicine Name', 'Dosage', 'Frequency', 'Duration']
-
-    for i, h in enumerate(headers):
-        pdf.cell(col_w[i], 8, h, 1, 0, 'C', 1)
+    # ═══════════════════════════════════════════════════════════════
+    # MEDICINE TABLE
+    # ═══════════════════════════════════════════════════════════════
+    table_start_y = pdf.get_y()
+    
+    # Table column widths: Medicine Name | Dosage | Dose M-A-E-B | Duration
+    col_widths = [55, 28, 45, 32]  # Adjusted for new column structure
+    total_width = sum(col_widths)
+    
+    # Table header
+    pdf.set_font('Arial', 'B', 9)
+    pdf.set_fill_color(205, 220, 235)  # Light blue header
+    pdf.set_text_color(0, 0, 0)
+    
+    headers = ['Medicine Name', 'Dosage', 'Dose M-A-E-B', 'Duration']
+    for i, header in enumerate(headers):
+        pdf.cell(col_widths[i], 8, header, 1, 0, 'C', True)
     pdf.ln()
-
-    pdf.set_font('Arial', '', 7)
-    for med in data['medicines']:
-        # Build display strings (truncate to fit the cell)
-        name_str = str(med.get('name', ''))[:32]
-        dose_str = str(med.get('dosage', ''))[:20]
-        freq_str = str(med.get('frequency', ''))[:26]
-        timing_val = med.get('timing', [])
-        if isinstance(timing_val, list) and timing_val:
-            timing_str = ', '.join(timing_val)
+    
+    # Table rows
+    pdf.set_font('Arial', '', 8)
+    pdf.set_fill_color(255, 255, 255)
+    
+    medicines = data.get('medicines', [])
+    for med in medicines:
+        name = str(med.get('name') or 'Medicine name missing')
+        dosage = str(med.get('dosage') or 'Dose not specified')
+        duration = str(med.get('duration') or 'As directed')
+        
+        # Build M-A-E-B (Morning-Afternoon-Evening-Bedtime) dose string
+        timing = med.get('timing', [])
+        if isinstance(timing, list):
+            # Convert timing list to M-A-E-B format
+            m = '1' if 'Morning' in timing else '0'
+            a = '1' if 'Afternoon' in timing else '0'
+            e = '1' if 'Evening' in timing else '0'
+            b = '1' if 'Bedtime' in timing else '0'
+            dose_maeb = f"{m}-{a}-{e}-{b}"
         else:
-            timing_str = '--'
-        # Break timing into two lines if long (Morning, Afternoon → two rows)
-        if len(timing_str) > 18:
-            parts = timing_val if isinstance(timing_val, list) else [timing_str]
-            mid   = (len(parts) + 1) // 2
-            timing_str = ', '.join(parts[:mid]) + '\n' + ', '.join(parts[mid:])
-        dur_str = str(med.get('duration', ''))[:18]
-
-        # Row height: use 7 for single-line, 12 if timing wraps
-        row_h = 12 if '\n' in timing_str else 7
-
-        # Save cursor Y before row so we can draw all cells at same height
-        row_y = pdf.get_y()
-        x_start = 15  # left margin
-
-        def draw_cell(col_idx, text, multiline=False):
-            pdf.set_xy(x_start + sum(col_w[:col_idx]), row_y)
-            if multiline and '\n' in text:
-                lines = text.split('\n')
-                pdf.set_xy(x_start + sum(col_w[:col_idx]), row_y)
-                pdf.rect(x_start + sum(col_w[:col_idx]), row_y, col_w[col_idx], row_h)
-                for li, line in enumerate(lines):
-                    pdf.set_xy(x_start + sum(col_w[:col_idx]) + 1,
-                               row_y + 1 + li * 5.5)
-                    pdf.cell(col_w[col_idx] - 2, 5, line.strip(), 0, 0, 'C')
-            else:
-                pdf.cell(col_w[col_idx], row_h, text, 1, 0, 'C')
-
-        draw_cell(0, name_str)
-        draw_cell(1, dose_str)
-        draw_cell(2, freq_str)
-        draw_cell(3, dur_str)
-
-        pdf.set_xy(x_start, row_y + row_h)
-
-        # Keep omitted administration details below the compact table row.
-        notes = []
-        if timing_str != '--':
-            notes.append('Timing: ' + timing_str.replace('\n', ', '))
-        food = (med.get('food_instruction') or '').strip()
-        if food:
-            notes.append('Food: ' + food)
-        special = (med.get('special_instructions') or '').strip()
-        if special:
-            notes.append('Note: ' + special)
-        if notes:
-            pdf.set_font('Arial', 'I', 6)
-            pdf.set_fill_color(245, 245, 245)
-            note_text = ' | '.join(notes)[:145]
-            pdf.cell(sum(col_w), 5, note_text, 1, 1, 'L', 1)
+            dose_maeb = '0-0-0-0'
+        
+        # Truncate if too long
+        if len(name) > 32:
+            name = name[:29] + '...'
+        if len(dosage) > 16:
+            dosage = dosage[:13] + '...'
+        if len(duration) > 18:
+            duration = duration[:15] + '...'
+        
+        # Medicine row: Medicine Name | Dosage | Dose M-A-E-B | Duration
+        pdf.cell(col_widths[0], 7, name, 1, 0, 'L')
+        pdf.cell(col_widths[1], 7, dosage, 1, 0, 'C')
+        pdf.cell(col_widths[2], 7, dose_maeb, 1, 0, 'C')
+        pdf.cell(col_widths[3], 7, duration, 1, 0, 'C')
+        pdf.ln()
+        
+        # Food & special instructions (if present) - compact format
+        instructions_parts = []
+        
+        food_instruction = str(med.get('food_instruction') or '').strip()
+        if food_instruction and food_instruction.lower() not in ['', 'none']:
+            instructions_parts.append(f"Food: {food_instruction}")
+        
+        timing_values = med.get('timing', [])
+        if isinstance(timing_values, list) and timing_values:
+            instructions_parts.append(f"Timing: {', '.join(timing_values)}")
+        
+        special_instructions = str(med.get('special_instructions') or med.get('instructions') or '').strip()
+        if special_instructions and special_instructions.lower() not in ['', 'none', 'no additional instructions']:
+            instructions_parts.append(f"Note: {special_instructions}")
+        
+        if instructions_parts:
+            instruction_text = ' | '.join(instructions_parts)
+            # Truncate if too long
+            if len(instruction_text) > 90:
+                instruction_text = instruction_text[:87] + '...'
+            
+            pdf.set_font('Arial', 'I', 7)
+            pdf.set_fill_color(240, 245, 250)
+            pdf.cell(total_width, 5, instruction_text, 1, 1, 'L', True)
+            pdf.set_font('Arial', '', 8)
             pdf.set_fill_color(255, 255, 255)
-            pdf.set_font('Arial', '', 7)
+    
+    pdf.ln(8)
 
-    pdf.ln(5)
-
-    # ================= DIGITAL SIGNATURE =================
-
-    # Create signature image
-    # ================= DIGITAL SIGNATURE =================
-
-    box_x = 15
-    box_y = 220
-    box_w = 60
-    box_h = 18
-
-    # Heading
-    pdf.set_xy(box_x, box_y - 7)
-    pdf.set_font("Arial", "B", 9)
-    pdf.set_text_color(0, 0, 0)
-    pdf.cell(0, 5, "Digital Signature:")
-
-    # Signature Box
-    pdf.rect(box_x, box_y, box_w, box_h)
-
-    # Signature Text
-    pdf.set_text_color(0, 102, 204)
-    pdf.set_font("Arial", "", 9)
-
-    pdf.set_xy(box_x + 2, box_y + 2)
-    pdf.cell(0, 4, "Digitally Signed", ln=1)
-
-    pdf.set_x(box_x + 2)
-    pdf.cell(0, 4, data["doctor"], ln=1)
-
-    pdf.set_x(box_x + 2)
-    pdf.cell(0, 4, datetime.now().strftime("%d/%m/%y %H:%M"), ln=1)
-
-    # Reset text color
-    pdf.set_text_color(0, 0, 0)
-
-
-    qr_x = 155
-    qr_y = 220
-
-    pdf.set_xy(qr_x, qr_y - 6)
-    pdf.set_font("Arial", "B", 8)
-    pdf.cell(35, 5, "Scan to Download", 0, 1, "C")
-
-    # ================= CREATE QR CODE =================
-
+    # ═══════════════════════════════════════════════════════════════
+    # DIGITAL SIGNATURE & QR CODE
+    # ═══════════════════════════════════════════════════════════════
+    signature_y = pdf.get_y()
+    
+    # Ensure enough space for signature section
+    if signature_y > 240:
+        pdf.add_page()
+        signature_y = pdf.get_y()
+    
+    # LEFT: Digital Signature
+    pdf.set_xy(15, signature_y)
+    pdf.set_font('Arial', 'B', 9)
+    pdf.cell(70, 6, "Doctor's signature:", 0, 1)
+    
+    # Signature box
+    pdf.set_xy(15, pdf.get_y())
+    pdf.rect(15, pdf.get_y(), 70, 25)
+    
+    pdf.set_xy(20, pdf.get_y() + 3)
+    pdf.set_font('Arial', '', 8)
+    pdf.cell(60, 5, 'Digitally Signed', 0, 1)
+    pdf.set_x(20)
+    pdf.cell(60, 5, doctor_name, 0, 1)
+    pdf.set_x(20)
+    pdf.cell(60, 5, today, 0, 1)
+    
+    # RIGHT: QR Code
     qr = qrcode.QRCode(
         version=2,
         error_correction=qrcode.constants.ERROR_CORRECT_H,
         box_size=4,
         border=2
     )
-
     qr.add_data(download_url)
     qr.make(fit=True)
-
-    qr_img = qr.make_image(fill_color="black", back_color="white")
-
-    qr_path = os.path.join(
-        GENERATED_FOLDER,
-        f"qr_{uuid.uuid4().hex[:8]}.png"
-    )
-
+    qr_img = qr.make_image(fill_color='black', back_color='white')
+    qr_path = os.path.join(GENERATED_FOLDER, f'qr_{uuid.uuid4().hex[:8]}.png')
     qr_img.save(qr_path)
-
-    pdf.image(qr_path, x=qr_x, y=qr_y, w=35, h=35)
-
-    pdf.set_y(278)
+    
+    qr_x = 145
+    qr_y = signature_y
+    
+    pdf.set_xy(qr_x, qr_y)
+    pdf.set_font('Arial', 'B', 9)
+    pdf.cell(40, 6, 'Scan to Download', 0, 1, 'C')
+    
+    pdf.image(qr_path, x=qr_x, y=qr_y + 8, w=40, h=40)
+    
+    # ═══════════════════════════════════════════════════════════════
+    # FOOTER
+    # ═══════════════════════════════════════════════════════════════
+    pdf.set_y(-20)
     pdf.set_font('Arial', 'I', 7)
     pdf.set_text_color(100, 100, 100)
-    pdf.cell(0, 4, 'This is a system-generated prescription. Valid with digital signature.', 0, 0, 'C')
-
+    pdf.cell(0, 5, 'This is a system-generated prescription. Valid with digital signature.', 0, 0, 'C')
+    
     pdf.output(filepath)
 
+
+
+@app.route('/extract-prescription', methods=['POST'])
+@role_required("doctor", api=True)
+def extract_prescription():
+    """
+    Extract structured medicine data from free-form prescription text using intelligent NLP.
+    This endpoint uses Gemini AI to understand natural doctor speech and convert it to structured data.
+    """
+    try:
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            return jsonify({"error": "Request must be JSON object."}), 400
+        
+        prescription_text = payload.get("text", "").strip()
+        if not prescription_text:
+            return jsonify({"error": "Prescription text is required."}), 400
+        
+        # Use intelligent extraction
+        result = extract_prescription_with_gemini(prescription_text)
+        
+        return jsonify({
+            "success": True,
+            "medicines": result.get("medicines", []),
+            "general_advice": result.get("general_advice", []),
+            "extraction_source": result.get("extraction_source", "unknown"),
+            "note": result.get("note", "")
+        })
+        
+    except Exception as e:
+        logger.exception("Prescription extraction failed")
+        return jsonify({
+            "error": f"Extraction failed: {str(e)}"
+        }), 500
 
 
 @app.route('/generate-prescription', methods=['POST'])
@@ -930,15 +1331,27 @@ def generate_prescription():
         # Generate the existing PDF first; only persist its reference when it exists.
         filename = create_prescription_filename(data["name"], visit_id)
         filepath          = os.path.join(GENERATED_FOLDER, filename)
-        local_download_url = url_for(
-            "download_patient_visit_pdf",
-            patient_id=patient_id,
-            visit_id=visit_id,
-            _external=True,
-        )
+        
+        # Generate QR code URL for patient access (public, no authentication required)
+        # QR code should point to /prescription/<visit_id> for direct PDF viewing
+        base_url = os.getenv("APPLICATION_BASE_URL", "").strip()
+        if base_url:
+            # Use configured base URL (for network access or production)
+            # Remove trailing slash
+            base_url = base_url.rstrip('/')
+            # Use public prescription route for QR code
+            qr_code_url = f"{base_url}/prescription/{visit_id}"
+        else:
+            # Use Flask's url_for (auto-detects from request)
+            qr_code_url = url_for(
+                "view_prescription_by_visit_id",
+                visit_id=visit_id,
+                _external=True,
+            )
 
         try:
-            generate_prescription_pdf(data, local_download_url, filepath)
+            # Generate PDF with QR code pointing to public prescription view
+            generate_prescription_pdf(data, qr_code_url, filepath)
             if not os.path.exists(filepath):
                 raise FileNotFoundError(
                     f"Generated prescription PDF not found at: {filepath}"
@@ -978,10 +1391,44 @@ def generate_prescription():
         except Exception as e:
             logger.error(f"SMS send failed: {e}")
 
+        # ── Send WhatsApp with PDF ───────────────────────────────────────────
+        # Automatically send prescription PDF via WhatsApp immediately after generation
+        try:
+            from sms import send_whatsapp_with_pdf
+            
+            if data.get("name") and data.get("phone_number"):
+                # Use the public prescription URL for WhatsApp PDF attachment
+                # Note: For Twilio to download the PDF, this URL must be publicly accessible
+                # For development: Use ngrok to expose local server
+                # For production: Use cloud storage URL (S3, Cloudinary, etc.)
+                
+                whatsapp_result = send_whatsapp_with_pdf(
+                    patient_name=data["name"],
+                    phone_number=data["phone_number"],
+                    pdf_url=qr_code_url  # Public prescription URL
+                )
+                
+                if whatsapp_result:
+                    logger.info(f"WhatsApp sent successfully to {data.get('phone_number')}, SID: {whatsapp_result}")
+                else:
+                    logger.warning(f"WhatsApp send failed for {data.get('phone_number')}")
+                    
+        except Exception as e:
+            logger.error(f"WhatsApp send failed: {e}")
+            logger.exception("Full WhatsApp error trace:")
+
+        # Generate authenticated download URL for doctor dashboard
+        doctor_download_url = url_for(
+            "download_patient_visit_pdf",
+            patient_id=patient_id,
+            visit_id=visit_id,
+            _external=False
+        )
+
         return jsonify({
             "success":            True,
-            "download_url":       local_download_url,
-            "local_download_url": local_download_url,
+            "download_url":       doctor_download_url,  # For doctor to download
+            "public_url":         qr_code_url,          # Public URL embedded in QR code
             "drive_url":          drive_url,
             "filename":           filename,
             "patient":            data["name"],
@@ -2722,6 +3169,7 @@ def get_doctor_patient_visit(patient_id, visit_id):
 )
 @role_required("doctor")
 def download_patient_visit_pdf(patient_id, visit_id):
+    """Doctor-authenticated route for downloading prescription PDFs."""
     visit = doctor_db.get_patient_visit(patient_id, visit_id)
     if not visit:
         return jsonify({"error": "Visit not found for this patient."}), 404
@@ -2729,6 +3177,49 @@ def download_patient_visit_pdf(patient_id, visit_id):
     if not filename or os.path.basename(filename) != filename:
         return jsonify({"error": "Prescription PDF is unavailable."}), 404
     return send_from_directory(GENERATED_FOLDER, filename, as_attachment=True)
+
+
+@app.route("/prescription/<visit_id>", methods=["GET"])
+def view_prescription_by_visit_id(visit_id):
+    """
+    Public route for patients to view their prescription via QR code.
+    Retrieves prescription using only Visit ID (no authentication required).
+    Opens PDF inline in browser for immediate viewing.
+    """
+    try:
+        # Validate visit_id format (basic security check)
+        if not visit_id or not isinstance(visit_id, str):
+            return jsonify({"error": "Invalid visit ID."}), 400
+        
+        # Get visit by visit_id only (without patient_id requirement)
+        visit = doctor_db.get_visit_by_id(visit_id)
+        
+        if not visit:
+            return render_template('prescription_not_found.html', visit_id=visit_id), 404
+        
+        # Get PDF filename
+        filename = visit.get("pdf_path")
+        if not filename:
+            return jsonify({"error": "Prescription PDF not found."}), 404
+        
+        # Security: Ensure filename is safe (no path traversal)
+        filename = os.path.basename(filename)
+        filepath = os.path.join(GENERATED_FOLDER, filename)
+        
+        if not os.path.exists(filepath):
+            return jsonify({"error": "Prescription PDF file does not exist."}), 404
+        
+        # Return PDF with inline display (opens in browser, not download)
+        return send_from_directory(
+            GENERATED_FOLDER,
+            filename,
+            mimetype='application/pdf',
+            as_attachment=False  # Display inline in browser
+        )
+        
+    except Exception as e:
+        logger.error(f"Error viewing prescription for visit {visit_id}: {e}")
+        return jsonify({"error": "Failed to retrieve prescription."}), 500
 
 
 @app.route("/doctor/interactions/analyze", methods=["POST"])
@@ -3370,7 +3861,7 @@ if __name__ == '__main__':
     print("\n" + "="*60 + "\n")
     
     # Use environment variables for debug mode and host
-    debug_mode = os.getenv("FLASK_DEBUG", "False").lower() == "true"
+    debug_mode = os.getenv("FLASK_DEBUG", "TRUE").lower() == "true"
     host = os.getenv("FLASK_HOST", "127.0.0.1")
     port = int(os.getenv("FLASK_PORT", "5000"))
     

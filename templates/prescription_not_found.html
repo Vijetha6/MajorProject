@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Prescription Not Found</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        
+        .container {
+            background: white;
+            border-radius: 16px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            padding: 40px;
+            max-width: 500px;
+            width: 100%;
+            text-align: center;
+        }
+        
+        .icon {
+            font-size: 80px;
+            margin-bottom: 20px;
+        }
+        
+        h1 {
+            color: #2d3748;
+            font-size: 28px;
+            margin-bottom: 16px;
+        }
+        
+        p {
+            color: #4a5568;
+            font-size: 16px;
+            line-height: 1.6;
+            margin-bottom: 20px;
+        }
+        
+        .visit-id {
+            background: #f7fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 12px;
+            font-family: 'Courier New', monospace;
+            color: #2d3748;
+            font-weight: 600;
+            margin: 20px 0;
+        }
+        
+        .reasons {
+            text-align: left;
+            background: #fff5f5;
+            border-left: 4px solid #fc8181;
+            padding: 16px;
+            border-radius: 4px;
+            margin: 20px 0;
+        }
+        
+        .reasons h3 {
+            color: #c53030;
+            font-size: 14px;
+            font-weight: 600;
+            margin-bottom: 12px;
+        }
+        
+        .reasons ul {
+            list-style: none;
+            padding: 0;
+        }
+        
+        .reasons li {
+            color: #742a2a;
+            font-size: 14px;
+            padding: 6px 0;
+            padding-left: 24px;
+            position: relative;
+        }
+        
+        .reasons li:before {
+            content: "•";
+            position: absolute;
+            left: 8px;
+            font-weight: bold;
+        }
+        
+        .btn {
+            display: inline-block;
+            background: #667eea;
+            color: white;
+            text-decoration: none;
+            padding: 12px 32px;
+            border-radius: 8px;
+            font-weight: 600;
+            margin-top: 24px;
+            transition: background 0.3s, transform 0.2s;
+        }
+        
+        .btn:hover {
+            background: #5a67d8;
+            transform: translateY(-2px);
+        }
+        
+        .footer {
+            margin-top: 32px;
+            padding-top: 24px;
+            border-top: 1px solid #e2e8f0;
+            color: #718096;
+            font-size: 13px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="icon">📋</div>
+        <h1>Prescription Not Found</h1>
+        <p>The prescription you're looking for could not be found in our system.</p>
+        
+        {% if visit_id %}
+        <div class="visit-id">
+            Visit ID: {{ visit_id }}
+        </div>
+        {% endif %}
+        
+        <div class="reasons">
+            <h3>Possible reasons:</h3>
+            <ul>
+                <li>The QR code may be invalid or expired</li>
+                <li>The prescription has been removed from the system</li>
+                <li>The Visit ID doesn't exist</li>
+                <li>The PDF file is missing</li>
+            </ul>
+        </div>
+        
+        <p>Please contact your doctor or the clinic for assistance.</p>
+        
+        <a href="/" class="btn">Return to Home</a>
+        
+        <div class="footer">
+            If you believe this is an error, please contact the clinic with your Visit ID.
+        </div>
+    </div>
+</body>
+</html>

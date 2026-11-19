@@ -271,6 +271,47 @@ def get_patient_visit(patient_id, visit_id):
         connection.close()
 
 
+def get_visit_by_id(visit_id):
+    """
+    Get visit information by visit_id only (for public prescription access).
+    Used by QR code scanning - does not require patient_id or authentication.
+    """
+    connection = get_connection()
+    try:
+        visit = connection.execute(
+            """
+            SELECT visit_id, patient_id, doctor_id, visit_date, diagnosis,
+                   notes, pdf_path, created_at
+            FROM visits
+            WHERE visit_id = ?
+            """,
+            (visit_id,),
+        ).fetchone()
+        if not visit:
+            return None
+
+        result = dict(visit)
+        medicines = connection.execute(
+            """
+            SELECT id, medicine_name, dosage, frequency, duration,
+                   instructions, timing, food_instruction,
+                   special_instructions
+            FROM visit_medicines
+            WHERE visit_id = ?
+            ORDER BY id
+            """,
+            (visit_id,),
+        ).fetchall()
+        result["medicines"] = []
+        for medicine in medicines:
+            medicine_data = dict(medicine)
+            medicine_data["timing"] = json.loads(medicine_data["timing"] or "[]")
+            result["medicines"].append(medicine_data)
+        return result
+    finally:
+        connection.close()
+
+
 def save_visit(
     patient_id,
     doctor_id,
