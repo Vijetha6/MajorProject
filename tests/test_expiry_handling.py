@@ -226,6 +226,20 @@ def test_add_and_update_medicine_normalize_without_partial_overwrite(inventory_d
         assert connection.execute("SELECT COUNT(*) FROM medicines").fetchone()[0] == 1
 
 
+def test_update_medicine_preserves_quantity_when_quantity_is_omitted(inventory_db):
+    medicine_id = database.add_medicine({
+        "medicine_name": "Test Medicine",
+        "expiry_date": "03/2027",
+        "quantity": 42,
+    })
+
+    assert database.update_medicine(
+        medicine_id,
+        {"medicine_name": "Updated Medicine", "expiry_date": "2027-03-15"},
+    )
+    assert database.get_medicine(medicine_id)["quantity"] == 42
+
+
 def test_api_validates_expiry_before_quantity_and_updates_existing_record(inventory_db):
     client = staff_client()
     created = client.post(
@@ -259,13 +273,20 @@ def test_api_validates_expiry_before_quantity_and_updates_existing_record(invent
     assert updated.status_code == 200
     assert database.get_medicine(medicine_id)["expiry_date"] == "2027-08-15"
 
+    update_without_quantity = client.put(
+        f"/medicine/{medicine_id}",
+        json={"medicine_name": "Manual Medicine", "expiry_date": "2027-08-20"},
+    )
+    assert update_without_quantity.status_code == 200
+    assert database.get_medicine(medicine_id)["quantity"] == 5
+
     empty_expiry = client.put(
         f"/medicine/{medicine_id}",
         json={"medicine_name": "Manual Medicine", "expiry_date": ""},
     )
     assert empty_expiry.status_code == 400
     assert "expiry date is required" in empty_expiry.get_json()["error"].lower()
-    assert database.get_medicine(medicine_id)["expiry_date"] == "2027-08-15"
+    assert database.get_medicine(medicine_id)["expiry_date"] == "2027-08-20"
 
 
 def test_ocr_result_can_be_saved_with_normalized_expiry(inventory_db, tmp_path, monkeypatch):

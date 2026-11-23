@@ -3,18 +3,19 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="MedInfo AI-powered medicine identification and inventory system">
-  <title>MedInfo | Medicine Intelligence Dashboard</title>
+  <meta name="description" content="MediNex intelligent healthcare and medicine management">
+  <meta name="theme-color" content="#10263e">
+  <title>MediNex | Healthcare Workspace</title>
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
   <div class="app-shell">
     <header class="app-header">
       <div class="brand-block">
-        <div class="brand-mark" aria-hidden="true">M</div>
+        <div class="brand-mark" aria-hidden="true">M<span>+</span></div>
         <div>
-          <p class="brand-name">MEDICINE TOOLKIT</p>
-          <p class="brand-tagline">AI-Powered Medicine Identification &amp; Inventory System</p>
+          <p class="brand-name">MediNex</p>
+          <p class="brand-tagline">Intelligent healthcare workspace</p>
         </div>
       </div>
       <div class="header-actions">
@@ -55,17 +56,23 @@
         <button id="tabGenerator" class="legacy-tab-control" type="button" hidden>Prescription Generator</button>
         <section id="dashboardSection" class="page-section home-section{% if initial_section == 'dashboardSection' %} active-section{% endif %}" aria-labelledby="dashboardTitle">
           {% if user_role == 'public' %}
-          <p class="home-description">Choose a workspace or continue as a patient.</p>
+          <p class="eyebrow">WELCOME TO MEDINEX</p>
+          <h1 id="dashboardTitle">Healthcare, made clearer.</h1>
+          <p class="home-description">Choose a workspace or continue as a user.</p>
           <div class="role-buttons">
-            <button class="role-button" type="button" data-section-target="scanSection">Patient</button>
+            <button class="role-button" type="button" data-section-target="scanSection">User</button>
             <a class="role-button" href="{{ url_for('doctor_login') }}">Doctor</a>
             <a class="role-button" href="{{ url_for('staff_login') }}">Medical Staff</a>
           </div>
           {% elif user_role == 'doctor' %}
-          <p class="home-description">Welcome to the Doctor Dashboard.</p>
+          <p class="eyebrow">DOCTOR WORKSPACE</p>
+          <h1 id="dashboardTitle">Welcome back, Doctor.</h1>
+          <p class="home-description">Patient records and care workflows, all in one place.</p>
           <div class="role-buttons"><button class="role-button" type="button" data-section-target="generatorTab">Create a prescription</button></div>
           {% else %}
-          <p class="home-description">Welcome to the Medical Staff Dashboard.</p>
+          <p class="eyebrow">MEDICAL STAFF WORKSPACE</p>
+          <h1 id="dashboardTitle">Your inventory, in focus.</h1>
+          <p class="home-description">Keep medicine stock, sales, and expiry monitoring organized.</p>
           <div class="role-buttons"><button class="role-button" type="button" data-section-target="inventorySection">Manage inventory</button></div>
           {% endif %}
         </section>
@@ -97,6 +104,7 @@
                 <span class="upload-title">Upload / Drag Medicine Image</span>
                 <span class="upload-help">PNG, JPG, or JPEG. Multiple images supported.</span>
               </label>
+              <p class="upload-retention-notice">Uploaded images are kept on this server in a private training archive. Do not upload images containing patient-identifiable information.</p>
               <input id="imageInput" type="file" name="images" accept="image/*" multiple hidden>
               <div id="previewContainer" class="preview-container" aria-live="polite">
                 <img id="preview" alt="Selected medicine image preview" class="upload-preview" hidden>

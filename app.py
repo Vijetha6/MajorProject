@@ -27,7 +27,9 @@ from database import (
     get_low_stock_medicines,
     sell_medicine,
     get_sales_history,
-    SaleError
+    SaleError,
+    save_training_image,
+    update_training_image,
 )
 import cv2
 import numpy as np
@@ -178,6 +180,11 @@ def role_required(role, api=False):
 
 UPLOAD_FOLDER = "uploads"
 GENERATED_FOLDER = "generated"
+TRAINING_IMAGES_FOLDER = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "training_data",
+    "images",
+)
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(GENERATED_FOLDER, exist_ok=True)
 
@@ -247,6 +254,39 @@ def cleanup_old_files():
                         logger.error(f"Failed to cleanup {filename}: {e}")
     except Exception as e:
         logger.error(f"Cleanup error: {e}")
+
+
+def archive_uploaded_training_image(filepath, original_filename):
+    """Keep the original upload outside the temporary upload cleanup folder."""
+    os.makedirs(TRAINING_IMAGES_FOLDER, exist_ok=True)
+    extension = os.path.splitext(secure_filename(original_filename))[1].lower()
+    if extension not in {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}:
+        extension = ".bin"
+
+    image_id = uuid.uuid4().hex
+    stored_filename = f"{image_id}{extension}"
+    archived_path = os.path.join(TRAINING_IMAGES_FOLDER, stored_filename)
+    shutil.copyfile(filepath, archived_path)
+
+    digest = hashlib.sha256()
+    with open(archived_path, "rb") as image_file:
+        for chunk in iter(lambda: image_file.read(1024 * 1024), b""):
+            digest.update(chunk)
+
+    try:
+        save_training_image(
+            image_id,
+            stored_filename,
+            secure_filename(original_filename) or "upload",
+            digest.hexdigest(),
+        )
+    except Exception:
+        if os.path.exists(archived_path):
+            os.remove(archived_path)
+        raise
+
+    return image_id
+
 
 COMMON_RX_MEDICINES = {
     'paracetamol': '500 mg', 'amoxicillin': '500 mg', 'crocin': '650 mg',
@@ -2822,9 +2862,22 @@ def process_image():
             name, ext = os.path.splitext(filename)
             unique_filename = f"{name}_{uuid.uuid4().hex[:8]}{ext}"
             filepath = os.path.join(UPLOAD_FOLDER, unique_filename)
-            file.save(filepath)
-
+            training_image_id = None
+            processing_status = "failed"
+            medicine_ocr = ""
             try:
+                file.save(filepath)
+                try:
+                    training_image_id = archive_uploaded_training_image(
+                        filepath,
+                        filename,
+                    )
+                except Exception as archive_error:
+                    logger.exception("Could not archive uploaded image for training")
+                    raise RuntimeError(
+                        "Could not save uploaded image for future training."
+                    ) from archive_error
+
                 logger.info(f"Processing: {filename}")
 
                 image = cv2.imread(filepath)
@@ -2832,7 +2885,6 @@ def process_image():
                     raise ValueError('Could not read image')
 
                 medicine_name = None
-                medicine_ocr = ""
                 expiry_date = "NOT FOUND"
                 expiry_ocr = ""
 
@@ -3050,6 +3102,7 @@ def process_image():
                         'other_drug_options': [],
                         'error': 'Could not extract medicine information'
                     })
+                processing_status = "processed"
             except Exception as file_error:
                 logger.exception("❌ PROCESSING ERROR for %s", filename)
                 results.append({
@@ -3060,6 +3113,37 @@ def process_image():
                     'other_drug_options': [],
                     'error': str(file_error)
                 })
+
+            result = results[-1]
+            if training_image_id:
+                result["training_image_id"] = training_image_id
+                result["training_archive_status"] = "saved"
+                try:
+                    update_training_image(
+                        training_image_id,
+                        processing_status=processing_status,
+                        extracted_text=medicine_ocr,
+                        medicine_name=result.get("medicine_name"),
+                        brand_name=result.get("brand_name"),
+                        generic_name=result.get("generic_name"),
+                        strength=result.get("strength"),
+                        dosage_form=result.get("dosage_form"),
+                        expiry_date=result.get("expiry_date"),
+                    )
+                except Exception:
+                    logger.exception(
+                        "Could not update metadata for archived image %s",
+                        training_image_id,
+                    )
+                    result["training_archive_status"] = "metadata_error"
+                    result["training_archive_error"] = (
+                        "Image was saved, but its training metadata could not be updated."
+                    )
+            else:
+                result["training_archive_status"] = "failed"
+                result["training_archive_error"] = (
+                    "Image could not be saved for future training."
+                )
 
         return jsonify(results)
 
@@ -3181,22 +3265,23 @@ def update_medicine_api(medicine_id):
         return jsonify({"error": str(error)}), 400
 
     try:
-        quantity = int(data.get('quantity', 0))
-
-        if quantity < 0:
-            return jsonify({"error": "quantity cannot be negative"}), 400
-
-        updated = update_medicine(medicine_id, {
+        medicine_data = {
             "medicine_name": data["medicine_name"],
             "brand_name": data.get("brand_name"),
             "generic_name": data.get("generic_name"),
             "strength": data.get("strength"),
             "dosage_form": data.get("dosage_form"),
             "expiry_date": expiry_date,
-            "quantity": quantity,
             "row_number": data.get("row_number"),
             "column_number": data.get("column_number")
-        })
+        }
+        if "quantity" in data:
+            quantity = int(data["quantity"])
+            if quantity < 0:
+                return jsonify({"error": "quantity cannot be negative"}), 400
+            medicine_data["quantity"] = quantity
+
+        updated = update_medicine(medicine_id, medicine_data)
 
         if not updated:
             return jsonify({

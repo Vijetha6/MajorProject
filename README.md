@@ -4,6 +4,10 @@ The system applies image preprocessing and object detection methods to handle va
 It also integrates information validation and provides bilingual output (English and Kannada) to enhance usability and accessibility for regional users. 
 verall, the project focuses on improving healthcare safety by reducing manual errors in medicine verification and promoting safer medication practices.
 
+## Medicine image archive for future training
+
+Images submitted to the medicine scanner are copied to `training_data/images/`, separately from temporary uploads that are cleaned up. The original filename, SHA-256 hash, OCR text, scan status, and extracted medicine details are recorded in the `training_images` table in `medicine_inventory.db`. The `verified_label` field is left empty so OCR/AI suggestions are not mistaken for reviewed training labels. The archive is private (not served as static files) and ignored by Git; back up this folder and the database separately if you need to preserve the dataset. Do not upload patient-identifiable images.
+
 ## Role-based sign-in
 
 The Doctor and Medical Staff dashboards use separate IDs and passwords read from the ignored `.env` file. Passwords are compared on the Flask backend and are never rendered into frontend code:

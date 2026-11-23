@@ -554,6 +554,10 @@ function renderResults(results) {
     const source =
       r.source || 'Gemini';
 
+    const trainingArchiveNotice = r.training_archive_status === 'saved'
+      ? '<p class="training-archive-notice">Image saved locally for future model training. OCR and AI labels should be reviewed before training.</p>'
+      : `<p class="training-archive-notice training-archive-error">${escapeHtml(r.training_archive_error || 'Image was not saved for future training.')}</p>`;
+
     // Get uses
     let uses = r.uses || r.uses_summary || [];
     if (typeof uses === 'string') {
@@ -603,6 +607,8 @@ function renderResults(results) {
           <div style="font-size: 12px; color: #999; margin-top: 5px;">
             ${labels.source}: ${escapeHtml(source)}
           </div>
+
+          ${trainingArchiveNotice}
 
         </div>
 
@@ -1134,7 +1140,7 @@ async function saveStaffMedicine(event) {
     staffUpdateStatus.textContent = 'Medicine saved to inventory.';
     addMedicineForm.reset();
     setStaffFieldsEditable(false);
-    loadInventory();
+    loadInventory().catch(error => console.error('Could not load inventory:', error));
     refreshExpiredMedicineStatus(false).catch(error => {
       console.error('Could not refresh expired medicine status:', error);
     });
@@ -1151,9 +1157,16 @@ function renderInventory(medicines) {
 }
 
 async function loadInventory() {
-  const response = await fetch('/medicines');
-  const data = await response.json();
-  renderInventory(data.medicines || []);
+  try {
+    const response = await fetch('/medicines');
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Could not load current stock.');
+    if (!Array.isArray(data.medicines)) throw new Error('The inventory response was invalid.');
+    renderInventory(data.medicines);
+  } catch (error) {
+    inventoryTableBody.innerHTML = `<tr><td colspan="7" class="table-empty" role="alert">Could not load current stock. Please refresh and try again. ${escapeHtml(error.message)}</td></tr>`;
+    throw error;
+  }
 }
 
 function renderAlertList(element, medicines, emptyText, withExpiryStatus = false, expiryNotifications = false) {
@@ -1288,7 +1301,9 @@ if (editExtractedFieldsBtn) editExtractedFieldsBtn.addEventListener('click', () 
   setStaffFieldsEditable(true);
   staffUpdateStatus.textContent = 'Edit the extracted details, then save the medicine.';
 });
-if (inventoryRefreshBtn) inventoryRefreshBtn.addEventListener('click', loadInventory);
+if (inventoryRefreshBtn) inventoryRefreshBtn.addEventListener('click', () => {
+  loadInventory().catch(error => console.error('Could not load inventory:', error));
+});
 
 // ==================== SELL MEDICINE & SALES HISTORY ====================
 const sellMedicineForm = document.getElementById('sellMedicineForm');

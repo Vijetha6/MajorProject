@@ -3,13 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="{{ role_name }} sign in for the Medicine Toolkit">
-  <title>{{ role_name }} Login | Medicine Toolkit</title>
+  <meta name="description" content="{{ role_name }} sign in for MediNex">
+  <title>{{ role_name }} Login | MediNex</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body class="auth-page">
   <main class="auth-card">
-    <a class="auth-brand" href="{{ url_for('index') }}">MEDICINE TOOLKIT</a>
+    <a class="auth-brand" href="{{ url_for('index') }}">MediNex</a>
     <p class="auth-eyebrow">Secure workspace</p>
     <h1>{{ role_name }} Login</h1>
     <p class="auth-description">Sign in with your {{ role_name.lower() }} account to continue.</p>
