@@ -3,18 +3,19 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="MedInfo AI-powered medicine identification and inventory system">
-  <title>MedInfo | Medicine Intelligence Dashboard</title>
+  <meta name="description" content="MediNex intelligent healthcare and medicine management">
+  <meta name="theme-color" content="#10263e">
+  <title>MediNex | Healthcare Workspace</title>
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
   <div class="app-shell">
     <header class="app-header">
       <div class="brand-block">
-        <div class="brand-mark" aria-hidden="true">M</div>
+        <div class="brand-mark" aria-hidden="true">M<span>+</span></div>
         <div>
-          <p class="brand-name">MEDICINE TOOLKIT</p>
-          <p class="brand-tagline">AI-Powered Medicine Identification &amp; Inventory System</p>
+          <p class="brand-name">MediNex</p>
+          <p class="brand-tagline">Intelligent healthcare workspace</p>
         </div>
       </div>
       <div class="header-actions">
@@ -55,17 +56,23 @@
         <button id="tabGenerator" class="legacy-tab-control" type="button" hidden>Prescription Generator</button>
         <section id="dashboardSection" class="page-section home-section{% if initial_section == 'dashboardSection' %} active-section{% endif %}" aria-labelledby="dashboardTitle">
           {% if user_role == 'public' %}
-          <p class="home-description">Choose a workspace or continue as a patient.</p>
+          <p class="eyebrow">WELCOME TO MEDINEX</p>
+          <h1 id="dashboardTitle">Healthcare, made clearer.</h1>
+          <p class="home-description">Choose a workspace or continue as a user.</p>
           <div class="role-buttons">
             <button class="role-button" type="button" data-section-target="scanSection">Patient</button>
             <a class="role-button" href="{{ url_for('doctor_login') }}">Doctor</a>
             <a class="role-button" href="{{ url_for('staff_login') }}">Medical Staff</a>
           </div>
           {% elif user_role == 'doctor' %}
-          <p class="home-description">Welcome to the Doctor Dashboard.</p>
+          <p class="eyebrow">DOCTOR WORKSPACE</p>
+          <h1 id="dashboardTitle">Welcome back, Doctor.</h1>
+          <p class="home-description">Patient records and care workflows, all in one place.</p>
           <div class="role-buttons"><button class="role-button" type="button" data-section-target="generatorTab">Create a prescription</button></div>
           {% else %}
-          <p class="home-description">Welcome to the Medical Staff Dashboard.</p>
+          <p class="eyebrow">MEDICAL STAFF WORKSPACE</p>
+          <h1 id="dashboardTitle">Your inventory, in focus.</h1>
+          <p class="home-description">Keep medicine stock, sales, and expiry monitoring organized.</p>
           <div class="role-buttons"><button class="role-button" type="button" data-section-target="inventorySection">Manage inventory</button></div>
           {% endif %}
         </section>
@@ -97,6 +104,7 @@
                 <span class="upload-title">Upload / Drag Medicine Image</span>
                 <span class="upload-help">PNG, JPG, or JPEG. Multiple images supported.</span>
               </label>
+              <p class="upload-retention-notice">Uploaded images are kept on this server in a private training archive. Do not upload images containing patient-identifiable information.</p>
               <input id="imageInput" type="file" name="images" accept="image/*" multiple hidden>
               <div id="previewContainer" class="preview-container" aria-live="polite">
                 <img id="preview" alt="Selected medicine image preview" class="upload-preview" hidden>
@@ -247,6 +255,7 @@
             <article class="content-card alert-card"><div class="card-heading"><h2>Expiring soon</h2><span class="alert-count" id="expiringCount">--</span></div><div id="expiringList" class="alert-list"><div class="empty-state">Expiring medicines will appear here.</div></div></article>
             <article class="content-card alert-card alert-card-danger"><div class="card-heading"><h2>Expired medicines</h2><span class="alert-count" id="expiredCount">--</span></div><div id="expiredList" class="alert-list"><div class="empty-state">Expired medicines will appear here.</div></div></article>
           </div>
+          <p id="expiryDeleteStatus" class="expiry-delete-status" role="status" aria-live="polite" hidden></p>
           <article class="content-card low-stock-monitor"><h2>Low-stock medicines</h2><div id="staffLowStockList" class="alert-list">Loading...</div></article>
         </section>
 
@@ -325,24 +334,34 @@
           </article>
 
           <section id="prescriptionWorkflow" class="content-card doctor-workflow-card" hidden aria-labelledby="newPrescriptionTitle">
-            <div class="patient-card-heading"><div><p class="eyebrow">New consultation</p><h2 id="newPrescriptionTitle">Voice-to-text prescription</h2></div><button id="closePrescriptionBtn" class="secondary-button" type="button">Close</button></div>
+            <div class="patient-card-heading"><div><p class="eyebrow">New consultation</p><h2 id="newPrescriptionTitle">New prescription</h2></div><button id="closePrescriptionBtn" class="secondary-button" type="button">Close</button></div>
             <p id="prescriptionPatientSummary" class="patient-summary"></p>
 
             <section class="prescription-entry-panel" aria-labelledby="prescriptionEntryTitle">
               <h3 id="prescriptionEntryTitle">Prescription entry</h3>
-              <p class="hint">Speak naturally, review the transcript carefully, and confirm the medicine details before saving.</p>
-              <div class="voice-action-row">
-                <button id="recordSpeechBtn" type="button" class="record-btn">Record Prescription</button>
-                <button id="addMedicineBtn" type="button" class="secondary-button small-button">Add Medicine</button>
-                <button id="removeMedicineBtn" type="button" class="secondary-button small-button">Remove Medicine</button>
-              </div>
+              <p class="hint">Voice-to-text prescription: type the doctor's instructions or record them, then review the text before saving.</p>
+              <button id="recordSpeechBtn" type="button" class="record-btn">Record Prescription</button>
               <p id="speechStatus" class="hint" aria-live="polite"></p>
               <label for="prescriptionText">Prescription text (review before saving)</label>
+
+              <div class="prescription-ai-actions">
+              <button id="extractPrescriptionBtn" type="button" class="secondary-button">
+                Extract Medicines with AI
+              </button>
+              <p id="extractionStatus" class="hint" aria-live="polite"></p>
+            </div>
+
+            <div id="structuredPrescriptionPreview" class="content-card" hidden>
+              <h3>AI Extracted Prescription</h3>
+              <p class="hint">
+                Review the extracted information carefully. Edit the original prescription
+                text if corrections are needed. AI extraction is only a draft.
+              </p>
+              <div id="extractedMedicineList"></div>
+              <div id="extractedGeneralAdvice"></div>
+            </div>
+
               <textarea id="prescriptionText" placeholder="Type a medicine, dosage, and instructions, or use Record Prescription."></textarea>
-              <div id="structuredPrescriptionPreview" class="structured-prescription-preview" aria-live="polite">
-                <p class="preview-title">Structured medicine preview</p>
-                <div class="preview-empty">No medicine details detected yet. Speak or type a prescription to preview it here.</div>
-              </div>
             </section>
             <div class="generator-actions">
               <button id="generateBtn" type="button" class="generate-btn" disabled>Save visit and generate PDF</button>
@@ -358,11 +377,12 @@
   {% if user_role == 'medical_staff' %}
   <dialog id="expiredMedicineModal" class="expired-medicine-modal" aria-labelledby="expiredMedicineTitle">
     <div class="expired-medicine-modal-header">
-      <h2 id="expiredMedicineTitle">EXPIRED MEDICINES ALERT</h2>
+      <h2 id="expiredMedicineTitle">EXPIRY ALERT</h2>
       <button id="closeExpiredMedicineModal" class="expired-medicine-modal-close" type="button">Close</button>
     </div>
     <div class="expired-medicine-modal-body">
       <p id="expiredMedicineWarning" class="expired-medicine-warning"></p>
+      <p id="expiredMedicineModalStatus" class="expiry-delete-status" role="status" aria-live="polite" hidden></p>
       <div id="expiredMedicineModalList" class="expired-medicine-list"></div>
     </div>
   </dialog>
@@ -374,6 +394,6 @@
   </div>
 
   <div id="toastContainer" class="toast-container" aria-live="polite" aria-atomic="true"></div>
-  <script src="/static/script.js?v=whatsapp-auto"></script>
+  <script src="/static/script.js"></script>
 </body>
 </html>

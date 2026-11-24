@@ -1,307 +1,39 @@
-# MedInfo - AI-Powered Medicine Intelligence System
+# MedInfo
+Developed an AI-based system to identify medicines from images and automatically extract the medicine name and expiry date using OCR and machine learning techniques. 
+The system applies image preprocessing and object detection methods to handle variations in lighting, orientation, and packaging design, ensuring accurate recognition in real-world conditions. 
+It also integrates information validation and provides bilingual output (English and Kannada) to enhance usability and accessibility for regional users. 
+verall, the project focuses on improving healthcare safety by reducing manual errors in medicine verification and promoting safer medication practices.
 
-Complete medicine identification, inventory management, and e-prescription system with AI integration.
+## Medicine image archive for future training
 
----
+Images submitted to the medicine scanner are copied to `training_data/images/`, separately from temporary uploads that are cleaned up. The original filename, SHA-256 hash, OCR text, scan status, and extracted medicine details are recorded in the `training_images` table in `medicine_inventory.db`. The `verified_label` field is left empty so OCR/AI suggestions are not mistaken for reviewed training labels. The archive is private (not served as static files) and ignored by Git; back up this folder and the database separately if you need to preserve the dataset. Do not upload patient-identifiable images.
 
-## 🚀 Quick Start (3 Steps)
+## Role-based sign-in
 
-```bash
-# 1. Install all dependencies
-install_dependencies.bat
+The Doctor and Medical Staff dashboards use separate IDs and passwords read from the ignored `.env` file. Passwords are compared on the Flask backend and are never rendered into frontend code:
 
-# 2. Verify installation
-python diagnose_startup.py
-
-# 3. Start the application
-python app.py
+```text
+FLASK_SECRET_KEY=<a random secret>
+DOCTOR_ID=<doctor login ID>
+DOCTOR_PASSWORD=<doctor development password>
+STAFF_ID=<medical staff login ID>
+STAFF_PASSWORD=<medical staff development password>
+EXPIRY_WARNING_DAYS=7
+TWILIO_ACCOUNT_SID=<Twilio account SID>
+TWILIO_AUTH_TOKEN=<Twilio auth token>
+TWILIO_PHONE_NUMBER=<Twilio sender number>
 ```
 
-**Access:** http://localhost:5000
+Use a unique random Flask secret, and use non-demo passwords outside local development. Set `SESSION_COOKIE_SECURE=true` when serving the application over HTTPS. Local HTTP development leaves this setting false. Start the application with `python app.py`.
 
----
+Prescription PDFs contain a QR code that links to a seven-day, signed prescription view. Set `APPLICATION_BASE_URL` or `PUBLIC_BASE_URL` to the public application URL when the app is behind a reverse proxy. The app now binds to `0.0.0.0` by default, and QR links created while using `127.0.0.1` or `localhost` use the clinic computer's detected LAN IP instead. For external/mobile access, the clinic network must allow port 5000 or the app should be deployed behind a public domain and HTTPS. A persistent instance secret key keeps QR links valid across restarts unless `FLASK_SECRET_KEY` is configured. When Google Drive and Twilio are configured and the patient has a phone number, the app uploads the PDF to Drive and sends the Drive viewing link by SMS. Drive OAuth uses `credentials.json` and `token.pickle` in the project folder. SMS is sent only after the Drive upload succeeds, and the Doctor dashboard reports upload or SMS failures. Drive files are shared with anyone who has the link, so treat SMS links as private.
 
-## 📋 Prerequisites
+The Medical Staff expiry monitor warns about medicines expiring within `EXPIRY_WARNING_DAYS` days (default: 7). When the staff dashboard loads, it also checks the existing inventory for expired medicines and displays a dismissible alert with stock and location details. Dismissing the popup leaves expired entries available in Expiry Alerts. The staff-only expiring-medicines API also accepts a `days` query parameter to override the threshold for an individual request.
 
-- **Python 3.8 or higher**
-- **Tesseract OCR** (for text recognition)
-  - Download: https://github.com/UB-Mannheim/tesseract/wiki
-  - Install to: `C:\Program Files\Tesseract-OCR`
-  - Add to PATH
+## Doctor patient records and e-prescriptions
 
----
+Authenticated Doctors can search patients by Patient ID or mobile number, register a new patient, review visit history, confirm which historical medicines are currently being taken, and save a new visit with an e-prescription PDF. Each visit stores its own medicines and is linked to the permanent Patient ID and the authenticated Doctor ID. Updating a patient's mobile number does not change the Patient ID or detach prior visits. Medical Staff and public users cannot access these records.
 
-## 📦 Dependencies
+Patient and prescription data is kept in the separate `doctor_records.db`; the medicine inventory remains in `medicine_inventory.db`. The Doctor database enforces SQLite foreign keys and transaction-scoped writes. It is local runtime data and is excluded from Git. Back up `doctor_records.db` before any future schema migration or database maintenance.
 
-All required packages are in `requirements.txt`:
-
-- Flask, OpenCV, NumPy, PyTorch
-- EasyOCR, Pytesseract, Roboflow
-- Google Genai, Google APIs
-- FPDF, QRCode, Twilio
-- And more...
-
-**Install:** `pip install -r requirements.txt`
-
----
-
-## 🔧 Setup Guide
-
-### Option 1: Automated Setup
-```bash
-install_dependencies.bat
-```
-
-### Option 2: Manual Setup
-```bash
-cd d:\Projects\MajorProject
-python -m pip install -r requirements.txt
-python diagnose_startup.py
-```
-
-**See:** `COMPLETE_SETUP_GUIDE.md` for detailed instructions.
-
----
-
-## 🎯 Features
-
-### For Patients
-- 📱 Medicine scanner (YOLO + OCR)
-- 📅 Expiry date detection
-- 🤖 AI-powered medicine information
-- 🌐 Multi-language support (English/Kannada)
-
-### For Medical Staff
-- 📦 Inventory management
-- 🔔 Expiry alerts
-- 📊 Low stock monitoring
-- 🗺️ Location tracking (row/column)
-
-### For Doctors
-- 👥 Patient management
-- 🎤 Voice-to-text prescription
-- 🤖 Intelligent medicine extraction
-- 📄 PDF prescription generation
-- 📱 QR code for mobile access
-- 💬 WhatsApp integration
-- ☁️ Google Drive upload
-- 📱 SMS notifications
-- 🔍 Medicine interaction analysis
-- 📜 Visit history tracking
-
----
-
-## 🌐 Access URLs
-
-| Device | URL | Notes |
-|--------|-----|-------|
-| **Laptop** | http://localhost:5000 | Local access |
-| **Network** | http://10.158.88.1:5000 | Same Wi-Fi |
-| **Mobile** | http://10.158.88.1:5000 | QR code works |
-
----
-
-## 🔐 Login Credentials
-
-### Doctor Dashboard
-- URL: http://localhost:5000/doctor/login
-- Username: `DOC001`
-- Password: `DOCTOR@123`
-
-### Medical Staff Dashboard
-- URL: http://localhost:5000/staff/login
-- Username: `STA001`
-- Password: `STAFF@123`
-
----
-
-## 📁 Project Structure
-
-```
-MajorProject/
-├── app.py                    # Main Flask application
-├── database.py               # Medicine inventory
-├── doctor_database.py        # Patient & prescriptions
-├── drive_upload.py           # Google Drive integration
-├── sms.py                    # Twilio SMS
-├── interaction_analysis.py   # Drug interactions
-├── requirements.txt          # Python dependencies
-├── .env                      # Configuration (API keys)
-├── templates/
-│   └── index.html           # Main UI
-├── static/
-│   ├── script.js            # Frontend logic
-│   └── style.css            # Styles
-└── generated/               # PDFs (auto-created)
-```
-
----
-
-## 🩺 Troubleshooting
-
-### Import Errors
-```bash
-# Diagnose which packages are missing
-python diagnose_startup.py
-
-# Install missing package
-pip install <package-name>
-```
-
-### Port Already in Use
-```bash
-taskkill /F /IM python.exe
-```
-
-### Tesseract Not Found
-1. Install Tesseract OCR
-2. Add to PATH: `C:\Program Files\Tesseract-OCR`
-3. Restart terminal
-
-### Cannot Access from Mobile
-1. Check Wi-Fi (same network?)
-2. Check FLASK_HOST=0.0.0.0 in .env
-3. Check Windows Firewall
-4. Verify IP: `python get_local_ip.py`
-
-**See:** `COMPLETE_SETUP_GUIDE.md` for more solutions.
-
----
-
-## 📚 Documentation
-
-| File | Purpose |
-|------|---------|
-| `README.md` | This file (overview) |
-| `COMPLETE_SETUP_GUIDE.md` | Full setup guide |
-| `DEPENDENCIES_FIXED.md` | Dependency details |
-| `START_APPLICATION.md` | Startup guide |
-| `NETWORK_ACCESS_SETUP.md` | Network config |
-| `QR_CODE_FIX_README.md` | QR code setup |
-| `SETUP_COMPLETE.md` | Configuration summary |
-
----
-
-## 🔄 Common Commands
-
-```bash
-# Install dependencies
-pip install -r requirements.txt
-
-# Diagnose issues
-python diagnose_startup.py
-
-# Get network IP
-python get_local_ip.py
-
-# Verify setup
-python verify_setup.py
-
-# Start application
-python app.py
-
-# Stop application
-Ctrl+C
-```
-
----
-
-## 🎨 Technology Stack
-
-- **Backend:** Flask (Python)
-- **Database:** SQLite
-- **Computer Vision:** OpenCV, YOLO, EasyOCR
-- **AI:** Google Gemini, Roboflow
-- **PDF Generation:** FPDF
-- **Cloud Storage:** Google Drive API
-- **SMS:** Twilio API
-- **Frontend:** HTML, CSS, JavaScript
-
----
-
-## ⚙️ Environment Variables
-
-Required in `.env`:
-
-```bash
-# API Keys
-ROBOFLOW_API_KEY=your_key
-GEMINI_API_KEY=your_key
-
-# Flask Settings
-FLASK_HOST=0.0.0.0
-FLASK_PORT=5000
-APPLICATION_BASE_URL=http://10.158.88.1:5000
-
-# Authentication
-DOCTOR_ID=DOC001
-DOCTOR_PASSWORD=DOCTOR@123
-STAFF_ID=STA001
-STAFF_PASSWORD=STAFF@123
-```
-
----
-
-## 🧪 Testing
-
-```bash
-# Test all imports
-python diagnose_startup.py
-
-# Expected output:
-# ✓ ALL TESTS PASSED - Application ready to start!
-```
-
----
-
-## 📞 Support
-
-For issues:
-1. Run `python diagnose_startup.py`
-2. Check error messages
-3. Review documentation files
-4. Verify .env configuration
-
----
-
-## 🎉 Success Indicators
-
-Application is ready when terminal shows:
-
-```
-🌐 Web interface: http://localhost:5000
-📡 API endpoint: http://localhost:5000/process
-
- * Running on all addresses (0.0.0.0)
- * Running on http://127.0.0.1:5000
- * Running on http://10.158.88.1:5000
-```
-
----
-
-## 🔒 Security Notes
-
-- Change default passwords in .env
-- Secure API keys
-- Use HTTPS in production
-- Set FLASK_DEBUG=False in production
-
----
-
-## 📄 License
-
-[Your License Here]
-
----
-
-## 🤝 Contributing
-
-[Your Contributing Guidelines]
-
----
-
-**Ready to start!**
-
-Run: `python app.py`
-
-Access: http://localhost:5000
+The project currently has no verified medicine-interaction knowledge base or RAG implementation. The Doctor workflow exposes an explicit integration point and reports interaction analysis as unavailable until a verified source is configured. An unavailable analysis is not a finding that no interaction exists; the Doctor must make the clinical decision.

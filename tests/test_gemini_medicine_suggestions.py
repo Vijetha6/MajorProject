@@ -2,6 +2,7 @@ import io
 import json
 
 import app as medicine_app
+import database
 
 
 class FakeGeminiClient:
@@ -133,7 +134,14 @@ def test_malformed_gemini_json_and_api_errors_return_none(monkeypatch):
 def test_process_returns_suggestion_fields_when_gemini_fails(monkeypatch, tmp_path):
     upload_folder = tmp_path / "uploads"
     upload_folder.mkdir()
+    monkeypatch.setattr(database, "DATABASE", tmp_path / "medicine_inventory.db")
+    database.init_database()
     monkeypatch.setattr(medicine_app, "UPLOAD_FOLDER", str(upload_folder))
+    monkeypatch.setattr(
+        medicine_app,
+        "TRAINING_IMAGES_FOLDER",
+        str(tmp_path / "training_data" / "images"),
+    )
     monkeypatch.setattr(medicine_app, "cleanup_old_files", lambda: None)
     monkeypatch.setattr(medicine_app.cv2, "imread", lambda _path: object())
     monkeypatch.setattr(medicine_app, "process_with_yolo", lambda _path: (None, None))

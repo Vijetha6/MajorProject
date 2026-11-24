@@ -120,8 +120,101 @@ def init_database():
         )
     """)
 
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS training_images (
+            image_id TEXT PRIMARY KEY,
+            stored_filename TEXT NOT NULL,
+            original_filename TEXT NOT NULL,
+            sha256 TEXT NOT NULL,
+            uploaded_at TEXT NOT NULL,
+            processing_status TEXT NOT NULL DEFAULT 'uploaded',
+            extracted_text TEXT NOT NULL DEFAULT '',
+            medicine_name TEXT,
+            brand_name TEXT,
+            generic_name TEXT,
+            strength TEXT,
+            dosage_form TEXT,
+            expiry_date TEXT,
+            verified_label TEXT
+        )
+    """)
+
     conn.commit()
     conn.close()
+
+
+def save_training_image(image_id, stored_filename, original_filename, sha256):
+    conn = get_connection()
+    try:
+        conn.execute("""
+            INSERT INTO training_images (
+                image_id, stored_filename, original_filename, sha256, uploaded_at
+            )
+            VALUES (?, ?, ?, ?, ?)
+        """, (
+            image_id,
+            stored_filename,
+            original_filename,
+            sha256,
+            datetime.now(INDIA_TIMEZONE).isoformat(timespec="seconds"),
+        ))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def update_training_image(
+    image_id,
+    processing_status,
+    extracted_text="",
+    medicine_name=None,
+    brand_name=None,
+    generic_name=None,
+    strength=None,
+    dosage_form=None,
+    expiry_date=None,
+):
+    conn = get_connection()
+    try:
+        cursor = conn.execute("""
+            UPDATE training_images
+            SET processing_status = ?,
+                extracted_text = ?,
+                medicine_name = ?,
+                brand_name = ?,
+                generic_name = ?,
+                strength = ?,
+                dosage_form = ?,
+                expiry_date = ?
+            WHERE image_id = ?
+        """, (
+            processing_status,
+            extracted_text,
+            medicine_name,
+            brand_name,
+            generic_name,
+            strength,
+            dosage_form,
+            expiry_date,
+            image_id,
+        ))
+        if cursor.rowcount != 1:
+            raise ValueError(f"Training image record not found: {image_id}")
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_training_image(image_id):
+    conn = get_connection()
+    try:
+        image = conn.execute(
+            "SELECT * FROM training_images WHERE image_id = ?",
+            (image_id,),
+        ).fetchone()
+        return dict(image) if image else None
+    finally:
+        conn.close()
 
 
 # ==================== ADD MEDICINE ====================
@@ -226,7 +319,7 @@ def update_medicine(medicine_id, data):
             strength = ?,
             dosage_form = ?,
             expiry_date = ?,
-            quantity = ?,
+            quantity = CASE WHEN ? THEN ? ELSE quantity END,
             row_number = ?,
             column_number = ?
         WHERE id = ?
@@ -237,6 +330,7 @@ def update_medicine(medicine_id, data):
         data.get("strength"),
         data.get("dosage_form"),
         expiry_date,
+        "quantity" in data,
         data.get("quantity", 0),
         data.get("row_number"),
         data.get("column_number"),
@@ -283,6 +377,48 @@ def delete_medicine(medicine_id):
     conn.close()
 
     return changed > 0
+
+
+def delete_expired_medicine(medicine_id):
+    if (
+        isinstance(medicine_id, bool)
+        or not isinstance(medicine_id, int)
+        or medicine_id < 1
+    ):
+        raise ValueError("A valid medicine ID is required.")
+
+    conn = get_connection()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        medicine = conn.execute(
+            "SELECT expiry_date FROM medicines WHERE id = ?",
+            (medicine_id,),
+        ).fetchone()
+        if medicine is None:
+            conn.rollback()
+            return None
+
+        try:
+            expiry_date = date.fromisoformat(normalize_expiry(medicine["expiry_date"]))
+        except ValueError:
+            conn.rollback()
+            return False
+
+        if expiry_date >= _india_today():
+            conn.rollback()
+            return False
+
+        deleted = conn.execute(
+            "DELETE FROM medicines WHERE id = ?",
+            (medicine_id,),
+        )
+        conn.commit()
+        return deleted.rowcount == 1
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 # ==================== EXPIRING MEDICINES ====================

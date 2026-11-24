@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en" data-user-role="public" data-initial-section="dashboardSection">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="MedInfo AI-powered medicine identification and inventory system">
+  <title>MedInfo | Medicine Intelligence Dashboard</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="app-header">
+      <div class="brand-block">
+        <div class="brand-mark" aria-hidden="true">M</div>
+        <div>
+          <p class="brand-name">MEDICINE TOOLKIT</p>
+          <p class="brand-tagline">AI-Powered Medicine Identification &amp; Inventory System</p>
+        </div>
+      </div>
+      <div class="header-actions">
+        
+      </div>
+    </header>
+
+    <div class="app-layout">
+      <aside class="sidebar" aria-label="Primary navigation">
+        <div class="sidebar-heading">Workspace</div>
+        <nav class="main-nav">
+          
+          <button class="nav-item" type="button" data-section="scanSection">Scan Medicine</button>
+          
+        </nav>
+        <div class="sidebar-footer">
+          <span class="status-dot" aria-hidden="true"></span>
+          <span>System ready</span>
+        </div>
+      </aside>
+
+      <main class="main-content">
+        <button id="tabGenerator" class="legacy-tab-control" type="button" hidden>Prescription Generator</button>
+        <section id="dashboardSection" class="page-section home-section active-section" aria-labelledby="dashboardTitle">
+          
+          <p class="home-description">Choose a workspace or continue as a patient.</p>
+          <div class="role-buttons">
+            <button class="role-button" type="button" data-section-target="scanSection">Patient</button>
+            <a class="role-button" href="/doctor/login">Doctor</a>
+            <a class="role-button" href="/staff/login">Medical Staff</a>
+          </div>
+          
+        </section>
+
+        <section id="scanSection" class="page-section" aria-labelledby="scanTitle">
+          <button id="tabAnalyzer" class="legacy-tab-control" type="button" hidden>Scan Medicine</button>
+          <button class="back-button" type="button" data-section-target="dashboardSection">Back to home</button>
+          <div class="patient-language-row">
+            <span aria-hidden="true">🌐</span>
+            <label for="langToggle">Language:</label>
+            <select id="langToggle" aria-label="Choose information language">
+              <option value="en">English</option>
+              <option value="kn">Kannada</option>
+            </select>
+          </div>
+          <div id="analyzerTab" class="tab-content active">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">AI scanner</p>
+              <h1 id="scanTitle">Identify a medicine</h1>
+              <p class="section-description">Analyze medicine packet to get expiry, name and information.</p>
+            </div>
+          </div>
+
+          <div class="scanner-layout">
+            <article class="content-card scanner-card">
+              <label for="imageInput" class="upload-zone upload-btn">
+                <span class="upload-icon" aria-hidden="true">+</span>
+                <span class="upload-title">Upload / Drag Medicine Image</span>
+                <span class="upload-help">PNG, JPG, or JPEG. Multiple images supported.</span>
+              </label>
+              <input id="imageInput" type="file" name="images" accept="image/*" multiple hidden>
+              <div id="previewContainer" class="preview-container" aria-live="polite">
+                <img id="preview" alt="Selected medicine image preview" class="upload-preview" hidden>
+              </div>
+              <button id="submitBtn" type="button" class="primary-button extract-btn">Scan Medicine</button>
+              <div id="loading" class="loading" hidden aria-live="polite">
+                <span class="spinner" aria-hidden="true"></span>
+                <p>Processing image. This may take a moment.</p>
+              </div>
+            </article>
+
+            <article class="content-card scanner-info-card">
+              <p class="eyebrow">Detection pipeline</p>
+              <h2>What MedInfo checks</h2>
+              <ul class="feature-list">
+                <li>Medicine name with YOLO and OCR</li>
+                <li>Expiry date from package text</li>
+                <li>AI-generated medicine information</li>
+                <li>English or Kannada response</li>
+              </ul>
+            </article>
+          </div>
+
+          <div id="output" class="results-container output" aria-live="polite">
+            <div class="empty-state results-empty-state">
+              <h2>Medicine results will appear here</h2>
+              <p>Scan a medicine image to view identification details.</p>
+            </div>
+          </div>
+
+          <article id="medicineResultTemplate" class="content-card medicine-result-card" hidden>
+            <div class="result-header">
+              <div>
+                <p class="eyebrow">Detection result</p>
+                <h2 class="result-medicine-name">Medicine information</h2>
+              </div>
+              <span class="result-source">Source: <strong class="result-source-value">--</strong></span>
+            </div>
+            <div class="result-fields">
+              <div class="result-field"><span>Brand Name</span><strong class="result-brand-name">Information not available</strong></div>
+              <div class="result-field"><span>Generic Name</span><strong class="result-generic-name">Information not available</strong></div>
+              <div class="result-field"><span>Strength</span><strong class="result-strength">Information not available</strong></div>
+              <div class="result-field"><span>Dosage Form</span><strong class="result-dosage-form">Information not available</strong></div>
+              <div class="result-field result-field-expiry"><span>Expiry Date</span><strong class="result-expiry-date">NOT FOUND</strong></div>
+            </div>
+            <div class="result-lists">
+              <div><h3>Uses</h3><ul class="result-uses"><li>Information not available</li></ul></div>
+              <div><h3>Side Effects</h3><ul class="result-side-effects"><li>Information not available</li></ul></div>
+              <div class="result-same-ingredient-alternatives"><h3>Same-Ingredient Brand Suggestions</h3></div>
+              <div class="result-other-drug-options"><h3>Other Medicines a Doctor May Consider (Not Interchangeable)</h3></div>
+            </div>
+            <p class="suggestions-disclaimer">AI-generated medicine suggestions are not verified substitutes. Always consult a qualified doctor or pharmacist before changing or replacing any medicine.</p>
+          </article>
+          </div>
+        </section>
+
+        
+
+        
+      </main>
+    </div>
+  </div>
+
+  <div id="medicineLocationModal" class="modal" hidden role="dialog" aria-modal="true" aria-labelledby="locationModalTitle">
+    <div class="modal-backdrop" data-close-modal></div>
+    <div class="modal-panel"><div class="modal-header"><h2 id="locationModalTitle">Medicine location</h2><button id="closeLocationModal" class="modal-close" type="button" aria-label="Close location dialog">&times;</button></div><div id="locationModalBody" class="location-details"><p>Row Number: <strong id="locationRowNumber">--</strong></p><p>Column Number: <strong id="locationColumnNumber">--</strong></p></div></div>
+  </div>
+
+  <div id="toastContainer" class="toast-container" aria-live="polite" aria-atomic="true"></div>
+  <script src="/static/script.js?v=whatsapp-auto"></script>
+</body>
+</html>

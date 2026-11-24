@@ -1,4 +1,8 @@
-
+from PIL import Image, ImageDraw, ImageFont
+try:
+    import qrcode
+except ImportError:
+    qrcode = None
 import os
 import re
 import time
@@ -9,6 +13,9 @@ import logging
 import uuid
 import hmac
 import secrets
+import socket
+from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
+
 from functools import wraps
 import doctor_database as doctor_db
 from interaction_analysis import analyze_medicine_interactions
@@ -22,26 +29,23 @@ from database import (
     update_medicine,
     update_quantity,
     delete_medicine,
+    delete_expired_medicine,
     get_expiring_medicines,
     get_expired_medicines,
     get_low_stock_medicines,
     sell_medicine,
     get_sales_history,
-    SaleError
+    SaleError,
+    save_training_image,
+    update_training_image,
 )
 import cv2
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import pytesseract
-# Initialize EasyOCR
-try:
-    import easyocr
-    reader = easyocr.Reader(['en'], gpu=False)
-    print("EasyOCR initialized successfully")
-except Exception as e:
-    print(f"EasyOCR initialization failed: {e}")
-    reader = None
+# EasyOCR is initialized later, after environment variables are loaded.
+reader = None
 try:
     from google import genai
 except Exception:
@@ -52,11 +56,12 @@ from drive_upload import upload_pdf_to_drive
 
 try:
     from sms import send_sms
-except Exception:
+except ImportError:
     def send_sms(patient_name, phone_number, download_url):
-        return None
+        raise RuntimeError("SMS support is unavailable; install the configured SMS provider.")
 from flask import Flask, request, jsonify, render_template, send_from_directory, session, redirect, url_for
 from werkzeug.utils import secure_filename
+from werkzeug.middleware.proxy_fix import ProxyFix
 from difflib import get_close_matches
 from datetime import datetime, timedelta
 try:
@@ -82,29 +87,6 @@ except Exception:
         def output(self, filepath):
             with open(filepath, 'wb') as f:
                 f.write(b'')
-        def image(self, *args, **kwargs):
-            return None
-try:
-    import qrcode
-except Exception:
-    # Minimal qrcode stub using PIL for tests
-    import types as _types
-    from PIL import Image as _Image
-
-    qrcode = _types.SimpleNamespace()
-    qrcode.constants = _types.SimpleNamespace(ERROR_CORRECT_H=1)
-
-    class _QR:
-        def __init__(self, **kwargs):
-            self.data = None
-        def add_data(self, d):
-            self.data = d
-        def make(self, fit=True):
-            return True
-        def make_image(self, fill_color="black", back_color="white"):
-            return _Image.new('RGB', (120, 120), color=back_color)
-
-    qrcode.QRCode = _QR
 from PIL import Image, ImageDraw, ImageFont
 
 load_dotenv()
@@ -119,7 +101,7 @@ else:
     if not GEMINI_API_KEY:
         raise ValueError("GEMINI_API_KEY not found in .env")
     client = genai.Client(api_key=GEMINI_API_KEY)
-    print("Gemini Loaded")
+    print("✅ Gemini Loaded")
 
 
 # Set up logging
@@ -127,8 +109,30 @@ logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
+
+def get_persistent_secret_key():
+    configured_key = os.getenv("FLASK_SECRET_KEY")
+    if configured_key:
+        return configured_key
+
+    os.makedirs(app.instance_path, exist_ok=True)
+    secret_path = os.path.join(app.instance_path, "flask_secret.key")
+    try:
+        with open(secret_path, "r", encoding="utf-8") as secret_file:
+            existing_key = secret_file.read().strip()
+        if existing_key:
+            return existing_key
+    except FileNotFoundError:
+        pass
+
+    persistent_key = secrets.token_hex(32)
+    with open(secret_path, "x", encoding="utf-8") as secret_file:
+        secret_file.write(persistent_key)
+    return persistent_key
+
 app.config.update(
-    SECRET_KEY=os.getenv("FLASK_SECRET_KEY") or secrets.token_hex(32),
+    SECRET_KEY=get_persistent_secret_key(),
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE="Lax",
     SESSION_COOKIE_SECURE=os.getenv("SESSION_COOKIE_SECURE", "false").lower() == "true",
@@ -146,10 +150,9 @@ app.config.update(
     },
 )
 if not os.getenv("FLASK_SECRET_KEY"):
-    logger.warning("FLASK_SECRET_KEY is unset; sessions will not survive application restarts.")
+    logger.info("Using the persistent instance secret key for sessions and QR links.")
 init_database()
 doctor_db.init_database()
-
 
 def role_required(role, api=False):
     def decorator(view):
@@ -178,16 +181,26 @@ def role_required(role, api=False):
 
 UPLOAD_FOLDER = "uploads"
 GENERATED_FOLDER = "generated"
+TRAINING_IMAGES_FOLDER = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "training_data",
+    "images",
+)
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(GENERATED_FOLDER, exist_ok=True)
 
-# Initialize EasyOCR
-try:
-    reader = easyocr.Reader(['en'], gpu=False)
-    logger.info("✓ EasyOCR initialized successfully")
-except Exception as e:
-    logger.error(f"✗ EasyOCR initialization failed: {e}")
+# Initialize EasyOCR only when enabled.
+if os.getenv("ENABLE_EASYOCR", "true").lower() == "true":
+    try:
+        import easyocr
+        reader = easyocr.Reader(['en'], gpu=False)
+        logger.info("EasyOCR initialized successfully")
+    except Exception as e:
+        logger.error(f"EasyOCR initialization failed: {e}")
+        reader = None
+else:
     reader = None
+    logger.info("EasyOCR disabled by configuration")
 
 # Configure Tesseract path
 def setup_tesseract():
@@ -198,13 +211,13 @@ def setup_tesseract():
         "/usr/local/bin/tesseract",
         shutil.which("tesseract")
     ]
-    
+
     for path in possible_paths:
         if path and os.path.exists(path):
             pytesseract.pytesseract.tesseract_cmd = path
             logger.info(f"✓ Tesseract found at: {path}")
             return True
-    
+
     logger.error("✗ Tesseract not found! Please install Tesseract OCR")
     return False
 
@@ -231,10 +244,10 @@ def cleanup_old_files():
     try:
         if not os.path.exists(UPLOAD_FOLDER):
             return
-        
+
         now = datetime.now()
         cutoff_time = now - timedelta(hours=24)
-        
+
         for filename in os.listdir(UPLOAD_FOLDER):
             filepath = os.path.join(UPLOAD_FOLDER, filename)
             if os.path.isfile(filepath):
@@ -247,6 +260,39 @@ def cleanup_old_files():
                         logger.error(f"Failed to cleanup {filename}: {e}")
     except Exception as e:
         logger.error(f"Cleanup error: {e}")
+
+
+def archive_uploaded_training_image(filepath, original_filename):
+    """Keep the original upload outside the temporary upload cleanup folder."""
+    os.makedirs(TRAINING_IMAGES_FOLDER, exist_ok=True)
+    extension = os.path.splitext(secure_filename(original_filename))[1].lower()
+    if extension not in {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}:
+        extension = ".bin"
+
+    image_id = uuid.uuid4().hex
+    stored_filename = f"{image_id}{extension}"
+    archived_path = os.path.join(TRAINING_IMAGES_FOLDER, stored_filename)
+    shutil.copyfile(filepath, archived_path)
+
+    digest = hashlib.sha256()
+    with open(archived_path, "rb") as image_file:
+        for chunk in iter(lambda: image_file.read(1024 * 1024), b""):
+            digest.update(chunk)
+
+    try:
+        save_training_image(
+            image_id,
+            stored_filename,
+            secure_filename(original_filename) or "upload",
+            digest.hexdigest(),
+        )
+    except Exception:
+        if os.path.exists(archived_path):
+            os.remove(archived_path)
+        raise
+
+    return image_id
+
 
 COMMON_RX_MEDICINES = {
     'paracetamol': '500 mg', 'amoxicillin': '500 mg', 'crocin': '650 mg',
@@ -262,7 +308,36 @@ COMMON_MEDICINES = [
     'omeprazole', 'pantoprazole', 'gastro'
 ]
 
-NOISE_WORDS = [ 
+OPENFDA_INGREDIENT_SYNONYMS = {
+    "paracetamol": "acetaminophen",
+    "acetaminophen": "paracetamol",
+}
+
+
+def build_openfda_search_candidates(medicine_name):
+    if not isinstance(medicine_name, str):
+        return []
+
+    normalized_name = re.sub(r"\s+", " ", medicine_name).strip()
+    if not normalized_name:
+        return []
+
+    match = re.match(r"^([A-Za-z]+)(.*)$", normalized_name)
+    if not match:
+        return [normalized_name]
+
+    ingredient, suffix = match.groups()
+    synonym = OPENFDA_INGREDIENT_SYNONYMS.get(ingredient.casefold())
+    if not synonym:
+        return [normalized_name]
+
+    synonym_candidate = f"{synonym}{suffix}"
+    if synonym_candidate.casefold() == normalized_name.casefold():
+        return [normalized_name]
+    return [normalized_name, synonym_candidate]
+
+
+NOISE_WORDS = [
     'download', 'price', 'gas', 'station', 'stations',
     'zone', 'bandra', '3 is on', 'in a', 'day for',
     'once in', 'twice in', 'three is', 'on twice',
@@ -330,6 +405,7 @@ def validate_prescription_text(text):
 
 def word_to_number(text):
     mapping = {
+        "zero": "0",
         "one": "1",
         "two": "2",
         "three": "3",
@@ -340,13 +416,24 @@ def word_to_number(text):
         "half": "1/2"
     }
 
-    words = text.split()
-    converted = []
+    converted_lines = []
+    for line in text.splitlines():
+        for word, number in mapping.items():
+            line = re.sub(rf"\b{word}\b", number, line, flags=re.IGNORECASE)
+        converted_lines.append(re.sub(r"\s+", " ", line).strip())
+    return "\n".join(converted_lines)
 
-    for w in words:
-        converted.append(mapping.get(w.lower(), w))
 
-    return " ".join(converted)
+DOSE_SCHEDULE_PATTERN = re.compile(
+    r"(?<![\d.])(\d+(?:\.\d+)?(?:(?:\s*[-/,]\s*|\s+)\d+(?:\.\d+)?){3})(?![\d.])"
+)
+
+
+def extract_dose_schedule(text):
+    match = DOSE_SCHEDULE_PATTERN.search(word_to_number(text))
+    if not match:
+        return ""
+    return "-".join(re.findall(r"\d+(?:\.\d+)?", match.group(1)))
 
 
 def normalize_duration_value(value):
@@ -371,7 +458,6 @@ def normalize_duration_value(value):
     value = value.replace("day ", "day ")
     return value
 
-
 def extract_timing_values(text):
     timing = []
     for slot in ["Morning", "Afternoon", "Evening", "Bedtime"]:
@@ -379,27 +465,32 @@ def extract_timing_values(text):
             timing.append(slot)
     return timing
 
-
 def is_likely_medicine_name(text):
     """Check if text is likely a medicine name vs conversation/advice"""
     if not text or len(text.strip()) < 2:
         return False
-    
+
     text_lower = text.lower().strip()
-    
+    if re.fullmatch(
+        r"(?:gastro[- ]resistant|enteric[- ]coated|extended[- ]release|"
+        r"sustained[- ]release|delayed[- ]release)(?:\s+(?:tablet|capsule))?",
+        text_lower,
+    ):
+        return False
+
     # Exclude common conversation phrases
     conversation_phrases = [
-        'hello', 'hi', 'doctor speaking', 'i am', 'the patient', 'should', 
+        'hello', 'hi', 'doctor speaking', 'i am', 'the patient', 'should',
         'take', 'adequate', 'rest', 'drink', 'water', 'plenty', 'recording',
         'completed', 'prescribe', 'also prescribe', 'for the patient',
         'good morning', 'good afternoon', 'good evening', 'thank you',
         'please', 'kindly', 'avoid', 'continue', 'stop', 'follow up'
     ]
-    
+
     for phrase in conversation_phrases:
         if phrase in text_lower:
             return False
-    
+
     # Exclude general advice patterns
     advice_patterns = [
         r'^(take|drink|avoid|continue|stop|get|do|don\'t)\s+',
@@ -407,26 +498,25 @@ def is_likely_medicine_name(text):
         r'^(the patient|patient should|you should)',
         r'(recording|transcript|completed|finished)'
     ]
-    
+
     for pattern in advice_patterns:
         if re.search(pattern, text_lower):
             return False
-    
+
     # Check if it looks like a medicine name (contains known medicine or has medicine-like pattern)
     known_medicine = any(med in text_lower for med in COMMON_MEDICINES)
     has_dosage = bool(re.search(r'\d+\s*(?:mg|ml|mcg|g)\b', text_lower))
     has_frequency = bool(re.search(r'\b(once|twice|thrice|daily|weekly)\b', text_lower))
-    
+
     # If it has both a known medicine pattern and dosage/frequency info, likely a medicine
     if known_medicine or (has_dosage and has_frequency):
         return True
-    
+
     # Check for medicine-like structure: word + number + unit
     if re.search(r'^[A-Za-z]{3,}(?:in|ol|ne|zine|cillin|mycin|pam|lol|pine|pril|sartan|tide|mine|dine|lone)\b', text_lower):
         return True
-    
-    return False
 
+    return False
 
 def extract_medicines_from_voice_transcript(text):
     """
@@ -435,29 +525,29 @@ def extract_medicines_from_voice_transcript(text):
     """
     if not text:
         return []
-    
+
     text = clean_prescription_text(word_to_number(text))
-    
+
     # Split by common separators but keep context
     segments = re.split(r'(?:\.|\.|also prescribe|and prescribe|prescribe)\s+', text, flags=re.IGNORECASE)
-    
+
     medicines = []
     general_advice = []
-    
+
     for segment in segments:
         segment = segment.strip()
         if not segment or len(segment) < 5:
             continue
-        
+
         segment_lower = segment.lower()
-        
+
         # Check if this segment contains medicine-like information
         has_medicine_indicator = (
             any(med in segment_lower for med in COMMON_MEDICINES) or
             re.search(r'\d+\s*(?:mg|ml|mcg|g)\b', segment_lower) or
             re.search(r'\b(tablet|capsule|syrup|injection)\b', segment_lower)
         )
-        
+
         # Check if it's general advice
         is_advice = (
             re.search(r'^(take|drink|avoid|get|do)\s+(adequate|plenty|rest|water|exercise)', segment_lower) or
@@ -465,34 +555,33 @@ def extract_medicines_from_voice_transcript(text):
             'recording completed' in segment_lower or
             'hello doctor' in segment_lower
         )
-        
+
         if is_advice:
             general_advice.append(segment)
             continue
-        
+
         if not has_medicine_indicator:
             continue
-        
+
         # Extract medicine details from this segment
         medicine_data = parse_medicine_segment(segment)
         if medicine_data and is_likely_medicine_name(medicine_data['name']):
             medicines.append(medicine_data)
-    
-    return medicines
 
+    return medicines
 
 def parse_medicine_segment(segment):
     """Parse a single segment that likely contains a medicine prescription"""
-    line = segment.strip()
+    line = word_to_number(segment.strip())
     line_lower = line.lower()
-    
+
     # Extract medicine name - look for word before dosage or frequency
     med_match = re.match(
         r'^(?:prescribe\s+)?([A-Za-z][A-Za-z .()-]+?)(?=\s+(?:\d+(?:/\d+)?\s*(?:mg|ml|mcg|g)|once|twice|thrice|daily|weekly))',
         line,
         re.IGNORECASE
     )
-    
+
     if not med_match:
         # Try to find known medicine names
         for known_med in COMMON_MEDICINES:
@@ -500,26 +589,27 @@ def parse_medicine_segment(segment):
                 med_match = re.search(rf'\b({known_med})\b', line, re.IGNORECASE)
                 if med_match:
                     break
-    
+
     if not med_match:
         return None
-    
+
     medicine = med_match.group(1).strip()
-    
+
     # Clean up medicine name
     medicine = re.sub(r'\b(prescribe|prescribed|tablet|capsule|syrup)\b', '', medicine, flags=re.IGNORECASE).strip()
-    
+
     if not medicine or len(medicine) < 2:
         return None
-    
+
     # Extract dosage
     dosage_match = re.search(r'(\d+(?:/\d+)?\s*(?:mg|ml|mcg|g|milligram|milligrams|mill))', line, re.IGNORECASE)
     dosage = dosage_match.group(1).strip() if dosage_match else "Dose not specified"
-    
+
     # Normalize dosage
     dosage = re.sub(r'\bmilligram(?:s)?\b', 'mg', dosage, flags=re.IGNORECASE)
     dosage = re.sub(r'\bmill\b', 'mg', dosage, flags=re.IGNORECASE)
-    
+    dose_schedule = extract_dose_schedule(line)
+
     # Extract frequency
     frequency = "As directed"
     if re.search(r'\b(?:once|1|one)\s+(?:daily|a day|per day|in a day)\b', line_lower):
@@ -530,7 +620,7 @@ def parse_medicine_segment(segment):
         frequency = "Thrice daily"
     elif re.search(r'\b(?:four times|4 times)\s+(?:daily|a day|per day)\b', line_lower):
         frequency = "Four times daily"
-    
+
     # Extract duration
     duration = "As directed"
     dur_match = re.search(
@@ -539,20 +629,21 @@ def parse_medicine_segment(segment):
     )
     if dur_match:
         duration = normalize_duration_value(dur_match.group(1))
-    
+
     # Extract timing
     timing = extract_timing_values(line)
-    
+
     # Extract food instruction
     food_instruction = ''
     food_match = re.search(r'(after food|before food|with food|empty stomach|before meal|after meal)', line_lower)
     if food_match:
         food_instruction = food_match.group(1).strip().title()
-    
+
     # Extract special instructions (excluding medicine name, dosage, frequency, etc.)
-    instructions = line
+    instructions = word_to_number(line)
     instructions = re.sub(rf'^{re.escape(medicine)}', '', instructions, flags=re.IGNORECASE)
     instructions = re.sub(re.escape(dosage), '', instructions, flags=re.IGNORECASE)
+    instructions = DOSE_SCHEDULE_PATTERN.sub('', instructions, count=1)
     instructions = re.sub(rf'\b{re.escape(frequency.lower())}\b', '', instructions, flags=re.IGNORECASE)
     instructions = re.sub(r'\bfor\s+.*?\b(?:day|days|week|weeks|month|months)\b', '', instructions, flags=re.IGNORECASE)
     instructions = re.sub(
@@ -562,14 +653,15 @@ def parse_medicine_segment(segment):
         flags=re.IGNORECASE
     )
     instructions = re.sub(r'[\s,;:-]+', ' ', instructions).strip()
-    
+
     if not instructions or len(instructions) < 3:
         instructions = ''
-    
+
     return {
         "name": medicine.title(),
         "dosage": dosage,
         "frequency": frequency,
+        "dose_schedule": dose_schedule,
         "duration": duration,
         "timing": timing,
         "food_instruction": food_instruction,
@@ -577,13 +669,12 @@ def parse_medicine_segment(segment):
         "instructions": instructions,
     }
 
-
 def extract_prescription_with_gemini(prescription_text):
     """
     Use Gemini to intelligently extract structured medicine data from free-form prescription text.
     Handles natural doctor speech patterns, multiple medicines, context across sentences,
     corrections, and separates medicines from general advice.
-    
+
     Returns:
         dict: {
             "medicines": [...],
@@ -598,7 +689,7 @@ def extract_prescription_with_gemini(prescription_text):
             "extraction_source": "fallback",
             "error": "Empty prescription text"
         }
-    
+
     # Check if Gemini is available
     if client is None or not GEMINI_API_KEY:
         logger.warning("Gemini not available, using fallback parser")
@@ -609,7 +700,7 @@ def extract_prescription_with_gemini(prescription_text):
             "extraction_source": "fallback",
             "note": "Intelligent extraction unavailable. Using pattern-based fallback."
         }
-    
+
     # Prepare Gemini prompt for intelligent extraction
     prompt = f"""You are a medical prescription extraction assistant. Your task is to extract structured medicine information from natural doctor speech or typed prescription text.
 
@@ -644,6 +735,7 @@ IMPORTANT INSTRUCTIONS:
    {{
      "name": "Medicine name (required)",
      "dosage": "Strength with unit (e.g., 500 mg)",
+     "dose_schedule": "Explicit M-A-E-B values, e.g. 1-0-1-0; empty if not stated",
      "frequency": "How often (e.g., Once daily, Twice daily, As directed)",
      "duration": "How long (e.g., 5 days, 1 week, As directed)",
      "timing": ["Morning", "Afternoon", "Evening", "Bedtime"],
@@ -687,6 +779,7 @@ Return ONLY valid JSON in this exact structure:
     {{
       "name": "Paracetamol",
       "dosage": "500 mg",
+      "dose_schedule": "1-0-1-0",
       "frequency": "Twice daily",
       "duration": "5 days",
       "timing": ["Morning", "Evening"],
@@ -702,13 +795,13 @@ Return ONLY valid JSON in this exact structure:
 
 CRITICAL: Return ONLY the JSON object. No markdown code blocks, no explanations, no additional text.
 """
-    
+
     try:
         response = client.models.generate_content(
             model=GEMINI_MODEL,
             contents=prompt
         )
-        
+
         response_text = response.text
         if not isinstance(response_text, str) or not response_text.strip():
             logger.warning("Gemini returned empty response for prescription extraction")
@@ -719,15 +812,15 @@ CRITICAL: Return ONLY the JSON object. No markdown code blocks, no explanations,
                 "extraction_source": "fallback",
                 "note": "Gemini returned empty response. Using fallback."
             }
-        
+
         # Clean response text
         response_text = response_text.strip()
-        
+
         # Remove markdown code blocks if present
         if response_text.startswith("```"):
             response_text = re.sub(r"^```(?:json)?\s*", "", response_text, flags=re.IGNORECASE)
             response_text = re.sub(r"\s*```$", "", response_text)
-        
+
         # Parse JSON
         try:
             data = json.loads(response_text)
@@ -740,7 +833,7 @@ CRITICAL: Return ONLY the JSON object. No markdown code blocks, no explanations,
                 "extraction_source": "fallback",
                 "note": "Invalid JSON from Gemini. Using fallback."
             }
-        
+
         # Validate structure
         if not isinstance(data, dict):
             logger.warning("Gemini returned non-dict JSON")
@@ -751,43 +844,47 @@ CRITICAL: Return ONLY the JSON object. No markdown code blocks, no explanations,
                 "extraction_source": "fallback",
                 "note": "Invalid structure from Gemini. Using fallback."
             }
-        
+
         # Extract and validate medicines
         medicines = data.get("medicines", [])
         if not isinstance(medicines, list):
             medicines = []
-        
+
         # Validate and clean each medicine
         validated_medicines = []
         for med in medicines:
             if not isinstance(med, dict):
                 continue
-            
+
             name = str(med.get("name", "")).strip()
             if not name or len(name) < 2:
                 continue
-            
+
             # Skip if it's likely not a medicine (general advice mistaken as medicine)
             if not is_likely_medicine_name(name):
                 continue
-            
+
             dosage = str(med.get("dosage", "")).strip() or "Dose not specified"
+            dose_schedule = extract_dose_schedule(
+                str(med.get("dose_schedule", ""))
+            )
             frequency = str(med.get("frequency", "")).strip() or "As directed"
             duration = str(med.get("duration", "")).strip() or "As directed"
             food_instruction = str(med.get("food_instruction", "")).strip()
             special_instructions = str(med.get("special_instructions", "")).strip()
-            
+
             # Validate timing array
             timing = med.get("timing", [])
             if not isinstance(timing, list):
                 timing = []
-            
+
             valid_timing_slots = {"Morning", "Afternoon", "Evening", "Bedtime"}
             timing = [str(t).strip() for t in timing if str(t).strip() in valid_timing_slots]
-            
+
             validated_medicines.append({
                 "name": name,
                 "dosage": dosage,
+                "dose_schedule": dose_schedule,
                 "frequency": frequency,
                 "duration": duration,
                 "timing": timing,
@@ -795,13 +892,57 @@ CRITICAL: Return ONLY the JSON object. No markdown code blocks, no explanations,
                 "special_instructions": special_instructions,
                 "instructions": special_instructions,
             })
-        
+
+        source_text = word_to_number(clean_prescription_text(prescription_text))
+
+        def find_source_context(medicine_name):
+            name_pattern = re.compile(
+                rf"\b{re.escape(medicine_name)}\b",
+                re.IGNORECASE,
+            )
+            match = name_pattern.search(source_text)
+            if not match:
+                return ""
+
+            next_medicine_starts = []
+            for other_medicine in validated_medicines:
+                if other_medicine["name"] == medicine_name:
+                    continue
+                other_match = re.search(
+                    rf"\b{re.escape(other_medicine['name'])}\b",
+                    source_text[match.end():],
+                    re.IGNORECASE,
+                )
+                if other_match:
+                    next_medicine_starts.append(
+                        match.end() + other_match.start()
+                    )
+
+            context_end = min(next_medicine_starts, default=len(source_text))
+            return source_text[match.end():context_end]
+
+        for medicine in validated_medicines:
+            source_context = find_source_context(medicine["name"])
+            medicine["dose_schedule"] = (
+                extract_dose_schedule(source_context)
+                or medicine["dose_schedule"]
+            )
+            if (
+                medicine["frequency"].lower() in {"once weekly", "twice weekly"}
+                and not re.search(
+                    r"\b(?:once|twice)\s+(?:weekly|a week|per week)\b",
+                    source_context,
+                    re.IGNORECASE,
+                )
+            ):
+                medicine["frequency"] = "As directed"
+
         # Extract general advice
         general_advice = data.get("general_advice", [])
         if not isinstance(general_advice, list):
             general_advice = []
         general_advice = [str(advice).strip() for advice in general_advice if isinstance(advice, str) and str(advice).strip()]
-        
+
         # If no medicines extracted and text looks like it should have medicines, try fallback
         if not validated_medicines and any(med in prescription_text.lower() for med in COMMON_MEDICINES):
             logger.warning("Gemini extracted no medicines but text contains known medicine names. Using fallback.")
@@ -812,13 +953,13 @@ CRITICAL: Return ONLY the JSON object. No markdown code blocks, no explanations,
                 "extraction_source": "fallback",
                 "note": "Gemini extracted no medicines. Using fallback."
             }
-        
+
         return {
             "medicines": validated_medicines,
             "general_advice": general_advice,
             "extraction_source": "gemini"
         }
-        
+
     except Exception as e:
         logger.exception("Gemini prescription extraction failed")
         fallback_medicines = extract_medicines_from_voice_transcript(prescription_text)
@@ -831,17 +972,177 @@ CRITICAL: Return ONLY the JSON object. No markdown code blocks, no explanations,
 
 
 def parse_prescription(text):
-    """
-    Parse prescription text - use intelligent extraction for voice transcripts
-    """
-    # First try intelligent extraction with Gemini
-    extraction_result = extract_prescription_with_gemini(text)
-    medicines = extraction_result.get("medicines", [])
-    
-    # If no medicines found, try fallback
-    if not medicines:
-        medicines = extract_medicines_from_voice_transcript(text)
-    
+
+    text = clean_prescription_text(word_to_number(text))
+
+    # Prescription text now contains ONLY medicines (no patient details)
+    prescription = text
+
+    # Split every medicine separately
+    medicine_lines = [
+        x.strip()
+        for x in re.split(r'[\n\.]+', prescription)
+        if x.strip()
+    ]
+
+    medicines = []
+
+    for line in medicine_lines:
+
+        line = word_to_number(line)
+        line_lower = line.lower()
+        dose_schedule = extract_dose_schedule(line)
+
+        # Medicine name
+        med_match = re.match(r'^([A-Za-z]+)', line)
+
+        if not med_match:
+            continue
+
+        medicine = med_match.group(1).title()
+
+        # ---------------- Dosage ----------------
+
+        dosage = "As directed"
+        dosage_text = re.sub(
+            r'\bfor\s+\d+\s+(?:day|days|week|weeks|month|months)\b.*$',
+            '',
+            line_lower
+        )
+        dosage_text = DOSE_SCHEDULE_PATTERN.sub(" ", dosage_text, count=1)
+        dosage_text = re.sub(
+            r'\b(?:once|twice|thrice)\s+(?:daily|a day|per day|weekly|a week|per week)\b',
+            '',
+            dosage_text
+        )
+        dosage_text = re.sub(
+            r'\b\d+\s*(?:times?\s+(?:daily|a day|per day)|per day)\b',
+            '',
+            dosage_text
+        )
+
+        d = re.search(
+            r'(?<![A-Za-z0-9])(\d+(?:/\d+)?)\s*(mg|ml|mcg|g|tablet|tab|capsule|cap)?',
+            dosage_text
+        )
+
+        if d:
+            dosage = d.group(1)
+
+            if d.group(2):
+                dosage += " " + d.group(2)
+
+        # ---------------- Frequency ----------------
+
+        frequency = "As directed"
+
+        if ("once daily" in line_lower or
+            "once per day" in line_lower or
+            "once a day" in line_lower or
+            "1 per day" in line_lower):
+
+            frequency = "Once daily"
+
+        elif ("twice daily" in line_lower or
+              "twice a day" in line_lower or
+              "twice per day" in line_lower or
+              "2 per day" in line_lower):
+
+            frequency = "Twice daily"
+
+        elif ("thrice daily" in line_lower or
+              "thrice a day" in line_lower or
+              "3 per day" in line_lower):
+
+            frequency = "Thrice daily"
+
+        elif ("once weekly" in line_lower or
+              "once per week" in line_lower):
+
+            frequency = "Once weekly"
+
+        elif ("twice weekly" in line_lower or
+              "twice per week" in line_lower):
+
+            frequency = "Twice weekly"
+
+        timing = extract_timing_values(line)
+        food_match = re.search(
+            r"\b(before|after|with)\s+food\b",
+            line,
+            re.IGNORECASE,
+        )
+        food_instruction = (
+            f"{food_match.group(1).capitalize()} food"
+            if food_match
+            else ""
+        )
+
+        # ---------------- Duration ----------------
+
+        duration = "As directed"
+
+        dur = re.search(
+            r'for\s+(\d+)\s+(days|day|weeks|week|months|month)',
+            line_lower
+        )
+
+        if dur:
+            duration = f"{dur.group(1)} {dur.group(2)}"
+
+        instructions = line_lower
+        instructions = re.sub(r'^[A-Za-z]+', '', instructions, count=1)
+        instructions = re.sub(
+            r'\b(?:once|twice|thrice)\s+(?:daily|a day|per day|weekly|a week|per week)\b',
+            ' ',
+            instructions,
+        )
+        instructions = re.sub(
+            r'\b\d+\s*(?:times?\s+(?:daily|a day|per day)|per day)\b',
+            ' ',
+            instructions,
+        )
+        instructions = re.sub(
+            r'\bfor\s+\d+\s+(?:day|days|week|weeks|month|months)\b',
+            ' ',
+            instructions,
+        )
+        instructions = re.sub(
+            r'(?<![A-Za-z0-9])\d+(?:/\d+)?\s*(?:mg|ml|mcg|g|tablet|tab|capsule|cap)?\b',
+            ' ',
+            instructions,
+            count=1,
+        )
+        instructions = DOSE_SCHEDULE_PATTERN.sub(" ", instructions, count=1)
+        if food_match:
+            instructions = re.sub(
+                re.escape(food_match.group(0).lower()),
+                " ",
+                instructions,
+                count=1,
+            )
+        for timing_value in timing:
+            instructions = re.sub(
+                rf"\b{timing_value.lower()}\b",
+                " ",
+                instructions,
+                flags=re.IGNORECASE,
+            )
+        instructions = re.sub(r'\b(?:take|please)\b', ' ', instructions)
+        instructions = re.sub(r'[\s,;:-]+', ' ', instructions).strip()
+
+        medicines.append({
+            "name": medicine,
+            "dosage": dosage,
+            "frequency": frequency,
+            "dose_schedule": dose_schedule,
+            "timing": timing,
+            "food_instruction": food_instruction,
+            "duration": duration,
+            "instructions": instructions,
+            "special_instructions": instructions,
+        })
+
     return {
         "name": "Patient",
         "age": "Not set",
@@ -861,297 +1162,297 @@ def create_prescription_filename(patient_name, visit_id):
     return f'prescription_{safe_name}_{safe_visit_id}.pdf'
 
 
-def generate_prescription_pdf(data, download_url, filepath):
-    """
-    Generate professional prescription PDF matching reference design.
-    Features:
-    - Clean clinic header with centered alignment
-    - Two-column patient/doctor info layout
-    - Professional medicine table with proper spacing
-    - Separate food/special instructions (not mixed in medicine names)
-    - Digital signature and QR code
-    - Professional footer
-    """
+def get_public_base_url():
+    configured_url = (
+        os.getenv("APPLICATION_BASE_URL")
+        or os.getenv("PUBLIC_BASE_URL")
+        or ""
+    ).strip().rstrip("/")
+
+    if configured_url:
+        if "://" not in configured_url:
+            configured_url = f"http://{configured_url}"
+        return configured_url
+
+    request_host = request.host_url.rstrip("/")
+
+    try:
+        request_hostname = request.host.split(":")[0].strip().lower()
+    except AttributeError:
+        request_hostname = ""
+
+    if request_hostname not in {"127.0.0.1", "localhost", "::1"}:
+        return request_host
+
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+            probe.connect(("8.8.8.8", 80))
+            lan_ip = probe.getsockname()[0]
+    except OSError:
+        try:
+            lan_ip = socket.gethostbyname(socket.gethostname())
+        except OSError:
+            lan_ip = "127.0.0.1"
+
+    port = os.getenv("FLASK_PORT", "5000")
+    if lan_ip == "127.0.0.1":
+        return request_host
+    return f"http://{lan_ip}:{port}"
+
+
+def generate_prescription_pdf(data, filepath):
     pdf = FPDF()
     pdf.add_page()
-    pdf.set_auto_page_break(auto=True, margin=15)
-    pdf.set_margins(15, 10, 15)
+    pdf.set_auto_page_break(False)
 
-    # Extract data
-    clinic_name = str(data.get('clinic') or data.get('clinic_name') or 'SHRI XYZ CLINIC')
-    clinic_tagline = str(data.get('clinic_tagline') or 'HEALTH IS WEALTH')
-    clinic_address = str(data.get('address') or 'xyzabc')
-    clinic_phone = str(data.get('phone') or data.get('clinic_phone') or '+91 **********')
-    clinic_email = str(data.get('email') or 'xyz@gmail.com')
-    
-    patient_name = str(data.get('name') or data.get('patient_name') or 'Patient')
-    patient_mobile = str(data.get('phone_number') or data.get('mobile_number') or '')
-    patient_age = str(data.get('age') or 'Not set')
-    patient_gender = str(data.get('gender') or 'Not set')
-    patient_id = str(data.get('patient_id') or '')
-    
-    doctor_name = str(data.get('doctor_name') or data.get('doctor') or 'Dr. XYZ')
-    if doctor_name and not doctor_name.lower().startswith('dr'):
-        doctor_name = f'Dr. {doctor_name}'
-    visit_id = str(data.get('visit_id') or '')
-    
-    today = datetime.now(doctor_db.INDIA_TIMEZONE).strftime('%d/%m/%Y')
-
-    # ═══════════════════════════════════════════════════════════════
-    # CLINIC HEADER (Centered)
-    # ═══════════════════════════════════════════════════════════════
-    pdf.set_font('Arial', 'B', 16)
-    pdf.set_text_color(0, 0, 0)
-    pdf.cell(0, 8, clinic_name.upper(), 0, 1, 'C')
-    
-    pdf.set_font('Arial', '', 9)
-    pdf.cell(0, 5, clinic_tagline.upper(), 0, 1, 'C')
-    
-    pdf.set_font('Arial', '', 8)
-    pdf.cell(0, 4, clinic_address, 0, 1, 'C')
-    pdf.cell(0, 4, f"Phone: {clinic_phone} | Email: {clinic_email}", 0, 1, 'C')
-    
-    pdf.ln(3)
-
-    # ═══════════════════════════════════════════════════════════════
-    # PRESCRIPTION HEADING WITH DATE
-    # ═══════════════════════════════════════════════════════════════
     pdf.set_font('Arial', 'B', 14)
-    pdf.cell(0, 7, 'PRESCRIPTION', 0, 1, 'C')
-    
-    # Date on the right side
-    pdf.set_font('Arial', '', 9)
-    pdf.set_xy(pdf.w - 55, pdf.get_y() - 7)
-    pdf.cell(40, 7, f'Date: {today}', 0, 0, 'R')
-    
-    pdf.ln(10)
-
-    # ═══════════════════════════════════════════════════════════════
-    # PATIENT & DOCTOR INFO (Two Columns)
-    # ═══════════════════════════════════════════════════════════════
-    info_start_y = pdf.get_y()
-    left_col_x = 15
-    right_col_x = 105
-    line_height = 6
-    
-    # LEFT COLUMN: Patient Info
-    pdf.set_xy(left_col_x, info_start_y)
-    pdf.set_font('Arial', 'B', 9)
-    pdf.cell(35, line_height, 'Patient Name:', 0, 0)
-    pdf.set_font('Arial', '', 9)
-    pdf.cell(55, line_height, patient_name, 0, 1)
-    
-    pdf.set_x(left_col_x)
-    pdf.set_font('Arial', 'B', 9)
-    pdf.cell(35, line_height, 'Mobile No:', 0, 0)
-    pdf.set_font('Arial', '', 9)
-    pdf.cell(55, line_height, patient_mobile, 0, 1)
-    
-    pdf.set_x(left_col_x)
-    pdf.set_font('Arial', 'B', 9)
-    pdf.cell(35, line_height, 'Age:', 0, 0)
-    pdf.set_font('Arial', '', 9)
-    pdf.cell(55, line_height, patient_age, 0, 1)
-    
-    pdf.set_x(left_col_x)
-    pdf.set_font('Arial', 'B', 9)
-    pdf.cell(35, line_height, 'Gender:', 0, 0)
-    pdf.set_font('Arial', '', 9)
-    pdf.cell(55, line_height, patient_gender, 0, 1)
-    
-    # RIGHT COLUMN: Doctor Info
-    pdf.set_xy(right_col_x, info_start_y)
-    pdf.set_font('Arial', 'B', 9)
-    pdf.cell(35, line_height, 'Doctor Name:', 0, 0)
-    pdf.set_font('Arial', '', 9)
-    pdf.cell(55, line_height, doctor_name, 0, 1)
-    
-    pdf.set_xy(right_col_x, info_start_y + line_height)
-    pdf.set_font('Arial', 'B', 9)
-    pdf.cell(35, line_height, 'Clinic:', 0, 0)
-    pdf.set_font('Arial', '', 9)
-    pdf.cell(55, line_height, clinic_name, 0, 1)
-    
-    pdf.set_xy(right_col_x, info_start_y + line_height * 2)
-    pdf.set_font('Arial', 'B', 9)
-    pdf.cell(35, line_height, 'Visit ID:', 0, 0)
-    pdf.set_font('Arial', '', 9)
-    pdf.cell(55, line_height, visit_id, 0, 1)
-    
-    if patient_id:
-        pdf.set_xy(right_col_x, info_start_y + line_height * 3)
-        pdf.set_font('Arial', 'B', 9)
-        pdf.cell(35, line_height, 'Patient ID:', 0, 0)
-        pdf.set_font('Arial', '', 9)
-        pdf.cell(55, line_height, patient_id, 0, 1)
-    
-    pdf.ln(8)
-
-    # ═══════════════════════════════════════════════════════════════
-    # MEDICINE TABLE
-    # ═══════════════════════════════════════════════════════════════
-    table_start_y = pdf.get_y()
-    
-    # Table column widths: Medicine Name | Dosage | Dose M-A-E-B | Duration
-    col_widths = [55, 28, 45, 32]  # Adjusted for new column structure
-    total_width = sum(col_widths)
-    
-    # Table header
-    pdf.set_font('Arial', 'B', 9)
-    pdf.set_fill_color(205, 220, 235)  # Light blue header
     pdf.set_text_color(0, 0, 0)
-    
-    headers = ['Medicine Name', 'Dosage', 'Dose M-A-E-B', 'Duration']
-    for i, header in enumerate(headers):
-        pdf.cell(col_widths[i], 8, header, 1, 0, 'C', True)
-    pdf.ln()
-    
-    # Table rows
-    pdf.set_font('Arial', '', 8)
-    pdf.set_fill_color(255, 255, 255)
-    
-    medicines = data.get('medicines', [])
-    for med in medicines:
-        name = str(med.get('name') or 'Medicine name missing')
-        dosage = str(med.get('dosage') or 'Dose not specified')
-        duration = str(med.get('duration') or 'As directed')
-        
-        # Build M-A-E-B (Morning-Afternoon-Evening-Bedtime) dose string
-        timing = med.get('timing', [])
-        if isinstance(timing, list):
-            # Convert timing list to M-A-E-B format
-            m = '1' if 'Morning' in timing else '0'
-            a = '1' if 'Afternoon' in timing else '0'
-            e = '1' if 'Evening' in timing else '0'
-            b = '1' if 'Bedtime' in timing else '0'
-            dose_maeb = f"{m}-{a}-{e}-{b}"
-        else:
-            dose_maeb = '0-0-0-0'
-        
-        # Truncate if too long
-        if len(name) > 32:
-            name = name[:29] + '...'
-        if len(dosage) > 16:
-            dosage = dosage[:13] + '...'
-        if len(duration) > 18:
-            duration = duration[:15] + '...'
-        
-        # Medicine row: Medicine Name | Dosage | Dose M-A-E-B | Duration
-        pdf.cell(col_widths[0], 7, name, 1, 0, 'L')
-        pdf.cell(col_widths[1], 7, dosage, 1, 0, 'C')
-        pdf.cell(col_widths[2], 7, dose_maeb, 1, 0, 'C')
-        pdf.cell(col_widths[3], 7, duration, 1, 0, 'C')
-        pdf.ln()
-        
-        # Food & special instructions (if present) - compact format
-        instructions_parts = []
-        
-        food_instruction = str(med.get('food_instruction') or '').strip()
-        if food_instruction and food_instruction.lower() not in ['', 'none']:
-            instructions_parts.append(f"Food: {food_instruction}")
-        
-        timing_values = med.get('timing', [])
-        if isinstance(timing_values, list) and timing_values:
-            instructions_parts.append(f"Timing: {', '.join(timing_values)}")
-        
-        special_instructions = str(med.get('special_instructions') or med.get('instructions') or '').strip()
-        if special_instructions and special_instructions.lower() not in ['', 'none', 'no additional instructions']:
-            instructions_parts.append(f"Note: {special_instructions}")
-        
-        if instructions_parts:
-            instruction_text = ' | '.join(instructions_parts)
-            # Truncate if too long
-            if len(instruction_text) > 90:
-                instruction_text = instruction_text[:87] + '...'
-            
-            pdf.set_font('Arial', 'I', 7)
-            pdf.set_fill_color(240, 245, 250)
-            pdf.cell(total_width, 5, instruction_text, 1, 1, 'L', True)
-            pdf.set_font('Arial', '', 8)
-            pdf.set_fill_color(255, 255, 255)
-    
-    pdf.ln(8)
+    pdf.cell(0, 6, 'XYZ CLINIC', 0, 1, 'C')
+    pdf.set_font('Arial', '', 9)
+    pdf.set_text_color(0, 0, 0)
 
-    # ═══════════════════════════════════════════════════════════════
-    # DIGITAL SIGNATURE & QR CODE
-    # ═══════════════════════════════════════════════════════════════
-    signature_y = pdf.get_y()
-    
-    # Ensure enough space for signature section
-    if signature_y > 240:
-        pdf.add_page()
-        signature_y = pdf.get_y()
-    
-    # LEFT: Digital Signature
-    pdf.set_xy(15, signature_y)
-    pdf.set_font('Arial', 'B', 9)
-    pdf.cell(70, 6, "Doctor's signature:", 0, 1)
-    
-    # Signature box
-    pdf.set_xy(15, pdf.get_y())
-    pdf.rect(15, pdf.get_y(), 70, 25)
-    
-    pdf.set_xy(20, pdf.get_y() + 3)
+
+    pdf.cell(0, 5, 'Serving Health Since 1990', 0, 1, 'C')
     pdf.set_font('Arial', '', 8)
-    pdf.cell(60, 5, 'Digitally Signed', 0, 1)
-    pdf.set_x(20)
-    pdf.cell(60, 5, doctor_name, 0, 1)
-    pdf.set_x(20)
-    pdf.cell(60, 5, today, 0, 1)
-    
-    # RIGHT: QR Code
-    qr = qrcode.QRCode(
-        version=2,
-        error_correction=qrcode.constants.ERROR_CORRECT_H,
-        box_size=4,
-        border=2
+    pdf.cell(0, 4, data['address'], 0, 1, 'C')
+    pdf.cell(0, 4, f"Phone: {data['phone']} | Email: {data['email']}", 0, 1, "C")
+    pdf.ln(3)
+    # ===================== DATE =====================
+    pdf.set_font("Arial", "", 9)
+    pdf.set_xy(165, 28)
+    pdf.cell(
+        30,
+        6,
+        f"Date: {datetime.now(doctor_db.INDIA_TIMEZONE).strftime('%d/%m/%Y')}",
+        0,
+        0,
+        "R",
     )
-    qr.add_data(download_url)
-    qr.make(fit=True)
-    qr_img = qr.make_image(fill_color='black', back_color='white')
-    qr_path = os.path.join(GENERATED_FOLDER, f'qr_{uuid.uuid4().hex[:8]}.png')
-    qr_img.save(qr_path)
-    
-    qr_x = 145
-    qr_y = signature_y
-    
-    pdf.set_xy(qr_x, qr_y)
-    pdf.set_font('Arial', 'B', 9)
-    pdf.cell(40, 6, 'Scan to Download', 0, 1, 'C')
-    
-    pdf.image(qr_path, x=qr_x, y=qr_y + 8, w=40, h=40)
-    
-    # ═══════════════════════════════════════════════════════════════
-    # FOOTER
-    # ═══════════════════════════════════════════════════════════════
-    pdf.set_y(-20)
+
+    # ===================== DETAILS =====================
+
+    left_x = 15
+    right_x = 110
+
+    row1 = 42
+    row2 = 50
+    row3 = 58
+
+    label_w = 35
+    value_w = 50
+
+    # -------- LEFT SIDE --------
+    pdf.set_font("Arial", "B", 9)
+# Row positions
+    row1 = 42
+    row2 = 50
+    row3 = 58
+    row4 = 66
+    row5 = 74
+
+# -------- LEFT SIDE --------
+
+    # Patient Name
+    pdf.set_xy(left_x, row1)
+    pdf.set_font("Arial", "B", 9)
+    pdf.cell(label_w, 6, "Patient Name:", 0, 0)
+    pdf.set_font("Arial", "", 9)
+    pdf.cell(value_w, 6, data["name"], 0, 0)
+
+    # Mobile Number
+    pdf.set_xy(left_x, row2)
+    pdf.set_font("Arial", "B", 9)
+    pdf.cell(label_w, 6, "Mobile No:", 0, 0)
+    pdf.set_font("Arial", "", 9)
+    pdf.cell(value_w, 6, data["phone_number"], 0, 0)
+
+    # Age
+    pdf.set_xy(left_x, row3)
+    pdf.set_font("Arial", "B", 9)
+    pdf.cell(label_w, 6, "Age:", 0, 0)
+    pdf.set_font("Arial", "", 9)
+    pdf.cell(value_w, 6, data["age"], 0, 0)
+
+    # Gender
+    pdf.set_xy(left_x, row4)
+    pdf.set_font("Arial", "B", 9)
+    pdf.cell(label_w, 6, "Gender:", 0, 0)
+    pdf.set_font("Arial", "", 9)
+    pdf.cell(value_w, 6, data["gender"], 0, 0)
+
+    # Patient ID
+    pdf.set_xy(left_x, row5)
+    pdf.set_font("Arial", "B", 9)
+    pdf.cell(label_w, 6, "Patient ID:", 0, 0)
+    pdf.set_font("Arial", "", 9)
+    pdf.cell(value_w, 6, data["patient_id"], 0, 0)
+
+    # -------- RIGHT SIDE --------
+
+    # Doctor ID
+    pdf.set_xy(right_x, row1)
+    pdf.set_font("Arial", "B", 9)
+    pdf.cell(label_w, 6, "Doctor ID:", 0, 0)
+    pdf.set_font("Arial", "", 9)
+    pdf.cell(0, 6, data["doctor"], 0, 0)
+
+    # Clinic
+    pdf.set_xy(right_x, row2)
+    pdf.set_font("Arial", "B", 9)
+    pdf.cell(label_w, 6, "Clinic:", 0, 0)
+    pdf.set_font("Arial", "", 9)
+    pdf.cell(0, 6, data["clinic"], 0, 0)
+
+    # Visit ID
+    pdf.set_xy(right_x, row3)
+    pdf.set_font("Arial", "B", 9)
+    pdf.cell(label_w, 6, "Visit ID:", 0, 0)
+    pdf.set_font("Arial", "", 9)
+    pdf.cell(0, 6, data["visit_id"], 0, 0)
+
+    pdf.set_y(82)
+    pdf.set_font('Arial', 'B', 8)
+    pdf.set_fill_color(200, 220, 240)
+
+    # Four-column prescription table.
+    col_w = [60, 30, 49, 41]
+    headers = ['Medicine Name', 'Dosage', 'Dose M-A-E-B', 'Duration']
+
+    for i, h in enumerate(headers):
+        pdf.cell(col_w[i], 9, h, 1, 0, 'C', 1)
+    pdf.ln()
+
+    pdf.set_font('Arial', '', 9)
+    for med in data['medicines']:
+        name_str = str(med.get('name', ''))
+        dose_str = str(med.get('dosage', ''))
+        dose_schedule = str(med.get('dose_schedule', '')).strip()
+        frequency = str(med.get('frequency', '')).strip()
+        schedule_str = dose_schedule or '--'
+        timing_val = med.get('timing', [])
+        if isinstance(timing_val, list) and timing_val:
+            timing_str = ', '.join(timing_val)
+        else:
+            timing_str = ''
+        dur_str = str(med.get('duration', ''))
+
+        row_y = pdf.get_y()
+        x_start = 15
+        row_h = 8
+        for col_idx, text in enumerate(
+            (name_str, dose_str, schedule_str, dur_str)
+        ):
+            pdf.set_xy(x_start + sum(col_w[:col_idx]), row_y)
+            pdf.cell(col_w[col_idx], row_h, text, 1, 0, 'C')
+
+        pdf.set_xy(x_start, row_y + row_h)
+        notes = []
+        food = (med.get('food_instruction') or '').strip()
+        if food:
+            notes.append('Food: ' + food)
+        if timing_str:
+            notes.append('Timing: ' + timing_str)
+        if frequency and frequency.lower() != "as directed":
+            notes.append('Frequency: ' + frequency)
+        special = (med.get('special_instructions') or '').strip()
+        if special:
+            notes.append('Note: ' + special)
+        if notes:
+            pdf.set_font('Arial', 'I', 8)
+            pdf.set_fill_color(245, 245, 245)
+            pdf.multi_cell(sum(col_w), 6, ' | '.join(notes), 1, 'L', 1)
+            pdf.set_fill_color(255, 255, 255)
+            pdf.set_font('Arial', '', 9)
+
+    pdf.ln(5)
+
+    # ================= DIGITAL SIGNATURE =================
+    box_x = 15
+    box_y = max(220, min(250, pdf.get_y() + 12))
+    box_w = 60
+    box_h = 18
+
+        # ================= QR CODE =================
+    qr_url = data.get("qr_url")
+
+    if qr_url and qrcode is not None:
+        qr = qrcode.QRCode(
+            version=None,
+            error_correction=qrcode.constants.ERROR_CORRECT_H,
+            box_size=4,
+            border=2,
+        )
+        qr.add_data(qr_url)
+        qr.make(fit=True)
+
+        qr_img = qr.make_image(
+            fill_color="black",
+            back_color="white",
+        )
+
+        qr_path = os.path.join(
+            GENERATED_FOLDER,
+            f"qr_{uuid.uuid4().hex[:12]}.png",
+        )
+
+        try:
+            qr_img.convert("RGB").save(qr_path, format="PNG")
+
+            pdf.set_font("Arial", "B", 8)
+            pdf.set_text_color(0, 0, 0)
+            pdf.set_xy(145, box_y - 10)
+            pdf.cell(45, 5, "Scan to View Prescription", 0, 0, "C")
+            pdf.image(qr_path, x=152.5, y=box_y - 4, w=30, h=30)
+        finally:
+            if os.path.exists(qr_path):
+                os.remove(qr_path)
+    pdf.set_xy(box_x, box_y - 7)
+    pdf.set_font("Arial", "B", 9)
+    pdf.set_text_color(0, 0, 0)
+    pdf.cell(0, 5, "Digital Signature:")
+
+    # Signature Box
+    pdf.rect(box_x, box_y, box_w, box_h)
+
+    # Signature Text
+    pdf.set_text_color(0, 0, 0)
+    pdf.set_font("Arial", "", 9)
+
+    pdf.set_xy(box_x + 2, box_y + 2)
+    pdf.cell(0, 4, "Digitally Signed", ln=1)
+
+    pdf.set_x(box_x + 2)
+    pdf.cell(0, 4, data["doctor"], ln=1)
+
+    pdf.set_x(box_x + 2)
+    pdf.cell(0, 4, datetime.now().strftime("%d/%m/%y %H:%M"), ln=1)
+
+    # Reset text color
+    pdf.set_text_color(0, 0, 0)
+
+    pdf.set_y(278)
     pdf.set_font('Arial', 'I', 7)
     pdf.set_text_color(100, 100, 100)
-    pdf.cell(0, 5, 'This is a system-generated prescription. Valid with digital signature.', 0, 0, 'C')
-    
+    pdf.cell(0, 4, 'This is a system-generated prescription. Valid with digital signature.', 0, 0, 'C')
     pdf.output(filepath)
-
 
 
 @app.route('/extract-prescription', methods=['POST'])
 @role_required("doctor", api=True)
 def extract_prescription():
-    """
-    Extract structured medicine data from free-form prescription text using intelligent NLP.
-    This endpoint uses Gemini AI to understand natural doctor speech and convert it to structured data.
-    """
     try:
         payload = request.get_json(silent=True)
+
         if not isinstance(payload, dict):
-            return jsonify({"error": "Request must be JSON object."}), 400
-        
-        prescription_text = payload.get("text", "").strip()
-        if not prescription_text:
+            return jsonify({"error": "Request must be a JSON object."}), 400
+
+        prescription_text = payload.get("text")
+
+        if not isinstance(prescription_text, str) or not prescription_text.strip():
             return jsonify({"error": "Prescription text is required."}), 400
-        
-        # Use intelligent extraction
-        result = extract_prescription_with_gemini(prescription_text)
-        
+
+        result = extract_prescription_with_gemini(prescription_text.strip())
+
         return jsonify({
             "success": True,
             "medicines": result.get("medicines", []),
@@ -1159,12 +1460,10 @@ def extract_prescription():
             "extraction_source": result.get("extraction_source", "unknown"),
             "note": result.get("note", "")
         })
-        
-    except Exception as e:
+
+    except Exception:
         logger.exception("Prescription extraction failed")
-        return jsonify({
-            "error": f"Extraction failed: {str(e)}"
-        }), 500
+        return jsonify({"error": "Prescription extraction failed."}), 500
 
 
 @app.route('/generate-prescription', methods=['POST'])
@@ -1218,6 +1517,7 @@ def generate_prescription():
                 name = text_value(m.get("name"))
                 dosage = text_value(m.get("dosage"))
                 frequency = text_value(m.get("frequency"))
+                dose_schedule = text_value(m.get("dose_schedule"))
                 food_instruction = text_value(m.get("food_instruction"))
                 duration = text_value(m.get("duration"))
                 timing  = m.get("timing", [])
@@ -1240,6 +1540,7 @@ def generate_prescription():
                     "name":                name,
                     "dosage":              dosage,
                     "frequency":           frequency,
+                    "dose_schedule":       dose_schedule,
                     "timing":              timing,
                     "food_instruction":    food_instruction,
                     "duration":            duration,
@@ -1319,6 +1620,7 @@ def generate_prescription():
         data["doctor"] = session["user_id"]
         for medicine in data["medicines"]:
             medicine.setdefault("frequency", "")
+            medicine.setdefault("dose_schedule", "")
             medicine.setdefault("duration", "")
             medicine.setdefault("timing", [])
             medicine.setdefault("food_instruction", "")
@@ -1342,27 +1644,27 @@ def generate_prescription():
         # Generate the existing PDF first; only persist its reference when it exists.
         filename = create_prescription_filename(data["name"], visit_id)
         filepath          = os.path.join(GENERATED_FOLDER, filename)
-        
-        # Generate QR code URL for patient access (public, no authentication required)
-        # QR code should point to /prescription/<visit_id> for direct PDF viewing
-        base_url = os.getenv("APPLICATION_BASE_URL", "").strip()
-        if base_url:
-            # Use configured base URL (for network access or production)
-            # Remove trailing slash
-            base_url = base_url.rstrip('/')
-            # Use public prescription route for QR code
-            qr_code_url = f"{base_url}/prescription/{visit_id}"
-        else:
-            # Use Flask's url_for (auto-detects from request)
-            qr_code_url = url_for(
-                "view_prescription_by_visit_id",
-                visit_id=visit_id,
-                _external=True,
-            )
+        local_download_url = url_for(
+            "download_patient_visit_pdf",
+            patient_id=patient_id,
+            visit_id=visit_id,
+            _external=True,
+        )
+
+        serializer = URLSafeTimedSerializer(app.config["SECRET_KEY"])
+
+        qr_token = serializer.dumps(
+            visit_id,
+            salt="prescription-qr",
+        )
+
+        data["qr_url"] = (
+            f"{get_public_base_url()}"
+            f"/prescription/view/{qr_token}"
+        )
 
         try:
-            # Generate PDF with QR code pointing to public prescription view
-            generate_prescription_pdf(data, qr_code_url, filepath)
+            generate_prescription_pdf(data, filepath)
             if not os.path.exists(filepath):
                 raise FileNotFoundError(
                     f"Generated prescription PDF not found at: {filepath}"
@@ -1392,56 +1694,39 @@ def generate_prescription():
             logger.warning("Google Drive upload skipped for %s: %s", filepath, exc)
 
         # ── Send SMS ─────────────────────────────────────────────────────────
-        try:
-            if data.get("name") and data.get("phone_number") and drive_url:
+        sms_sent = False
+        sms_error = None
+        if not data.get("name") or not data.get("phone_number"):
+            sms_error = "No patient phone number is available; prescription was saved without SMS."
+        elif not drive_url:
+            sms_error = (
+                "Prescription was saved, but its Google Drive link is unavailable, "
+                "so the SMS was not sent."
+            )
+        else:
+            try:
                 send_sms(
                     patient_name=data["name"],
                     phone_number=data["phone_number"],
-                    download_url=drive_url
+                    download_url=drive_url,
                 )
-        except Exception as e:
-            logger.error(f"SMS send failed: {e}")
-
-        # ── Send WhatsApp with PDF ───────────────────────────────────────────
-        # Automatically send prescription PDF via WhatsApp immediately after generation
-        try:
-            from sms import send_whatsapp_with_pdf
-            
-            if data.get("name") and data.get("phone_number"):
-                # Use the public prescription URL for WhatsApp PDF attachment
-                # Note: For Twilio to download the PDF, this URL must be publicly accessible
-                # For development: Use ngrok to expose local server
-                # For production: Use cloud storage URL (S3, Cloudinary, etc.)
-                
-                whatsapp_result = send_whatsapp_with_pdf(
-                    patient_name=data["name"],
-                    phone_number=data["phone_number"],
-                    pdf_url=qr_code_url  # Public prescription URL
+                sms_sent = True
+            except Exception:
+                logger.exception("SMS send failed for visit %s", visit_id)
+                sms_error = (
+                    "Prescription was uploaded, but SMS could not be sent. "
+                    "Check the Twilio settings and patient phone number."
                 )
-                
-                if whatsapp_result:
-                    logger.info(f"WhatsApp sent successfully to {data.get('phone_number')}, SID: {whatsapp_result}")
-                else:
-                    logger.warning(f"WhatsApp send failed for {data.get('phone_number')}")
-                    
-        except Exception as e:
-            logger.error(f"WhatsApp send failed: {e}")
-            logger.exception("Full WhatsApp error trace:")
-
-        # Generate authenticated download URL for doctor dashboard
-        doctor_download_url = url_for(
-            "download_patient_visit_pdf",
-            patient_id=patient_id,
-            visit_id=visit_id,
-            _external=False
-        )
 
         return jsonify({
             "success":            True,
-            "download_url":       doctor_download_url,  # For doctor to download
-            "public_url":         qr_code_url,          # Public URL embedded in QR code
+            "download_url":       local_download_url,
+            "local_download_url": local_download_url,
+            "sms_sent":           sms_sent,
+            "sms_error":          sms_error,
             "drive_url":          drive_url,
             "filename":           filename,
+            "qr_url":             data["qr_url"],
             "patient":            data["name"],
             "patient_id":         patient_id,
             "visit_id":           visit_id,
@@ -1458,6 +1743,43 @@ def generate_prescription():
             'error': 'Prescription generation failed. ' + str(e)
         }), 500
 
+
+@app.route("/prescription/view/<token>", methods=["GET"])
+def view_prescription_qr(token):
+    serializer = URLSafeTimedSerializer(app.config["SECRET_KEY"])
+
+    try:
+        visit_id = serializer.loads(
+            token,
+            salt="prescription-qr",
+            max_age=7 * 24 * 60 * 60,
+        )
+    except (BadSignature, SignatureExpired):
+        return jsonify({"error": "Invalid or expired prescription link."}), 403
+
+    visit = doctor_db.get_visit_by_id(visit_id)
+
+    if not visit:
+        return jsonify({"error": "Prescription not found."}), 404
+
+    filename = visit.get("pdf_path")
+
+    if not filename or os.path.basename(filename) != filename:
+        return jsonify({"error": "Prescription PDF unavailable."}), 404
+
+    filepath = os.path.join(GENERATED_FOLDER, filename)
+
+    if not os.path.isfile(filepath):
+        return jsonify({"error": "Prescription PDF unavailable."}), 404
+
+    return send_from_directory(
+        GENERATED_FOLDER,
+        filename,
+        mimetype="application/pdf",
+        as_attachment=False,
+        conditional=True,
+        max_age=0,
+    )
 
 @app.route('/generated/<path:filename>')
 @role_required("doctor")
@@ -2400,9 +2722,9 @@ def extract_expiry_date(text):
     """Extract expiry date from text"""
     if not text:
         return "NOT FOUND"
-    
+
     text = text.upper()
-    
+
     # Common expiry patterns
     patterns = [
         # EXP: MM/YYYY or MM/YY
@@ -2414,25 +2736,25 @@ def extract_expiry_date(text):
         # Year first format
         r'(\d{4})[/\-\.](\d{1,2})',
     ]
-    
+
     month_map = {
         'JAN': '01', 'FEB': '02', 'MAR': '03', 'APR': '04',
         'MAY': '05', 'JUN': '06', 'JUL': '07', 'AUG': '08',
         'SEP': '09', 'OCT': '10', 'NOV': '11', 'DEC': '12'
     }
-    
+
     for pattern in patterns:
         matches = re.findall(pattern, text)
         for match in matches:
             if isinstance(match, tuple) and len(match) == 2:
                 first, second = match
-                
+
                 # Check if first is month name
                 if first in month_map:
                     month = month_map[first]
                     year = second[-2:] if len(second) > 2 else second
                     return f"{month}/{year}"
-                
+
                 # Check if numeric
                 try:
                     if first.isdigit() and second.isdigit():
@@ -2446,7 +2768,7 @@ def extract_expiry_date(text):
                             return f"{month}/{year}"
                 except ValueError:
                     continue
-    
+
     return "NOT FOUND"
 
 # ===============================
@@ -2466,36 +2788,36 @@ def extract_medicine_with_easyocr_rotations(image):
     """Extract medicine text using EasyOCR with rotation analysis"""
     # Upscale image for better accuracy
     image = upscale_for_ocr(image, scale=3)
-    
+
     rotations = [
         ("0", image),
         ("90", cv2.rotate(image, cv2.ROTATE_90_CLOCKWISE)),
         ("180", cv2.rotate(image, cv2.ROTATE_180)),
         ("270", cv2.rotate(image, cv2.ROTATE_90_COUNTERCLOCKWISE))
     ]
-    
+
     candidates = []
-    
+
     for angle, rotated in rotations:
         if reader is None:
             continue
-            
+
         try:
             results = reader.readtext(
                 rotated,
                 detail=1,
                 paragraph=False
             )
-            
+
             for box, text, confidence in results:
                 text = text.strip()
                 if not text:
                     continue
-                
+
                 letters = sum(c.isalpha() for c in text)
                 if letters < 2:
                     continue
-                
+
                 candidates.append({
                     "text": text,
                     "confidence": float(confidence),
@@ -2504,49 +2826,49 @@ def extract_medicine_with_easyocr_rotations(image):
                 })
         except Exception as e:
             logger.debug(f"EasyOCR rotation {angle} error: {e}")
-    
+
     return candidates
 
 def filter_medicine_candidates(candidates):
     """Filter OCR candidates to keep useful ones"""
     useful = []
-    
+
     for c in candidates:
         text = c["text"].strip()
         confidence = c["confidence"]
         letters = sum(ch.isalpha() for ch in text)
-        
+
         if len(text) < 2:
             continue
         if letters < 2:
             continue
-        
+
         if confidence >= 0.20:
             useful.append(c)
         elif len(text) >= 6 and letters >= 4:
             useful.append(c)
-    
+
     return useful
 
 def choose_best_rotation(candidates):
     """Choose the best rotation based on confidence and text quality"""
     rotations = {}
-    
+
     for c in candidates:
         rotation = c["rotation"]
         text = c["text"].strip()
-        
+
         if not text:
             continue
-        
+
         letters = sum(ch.isalpha() for ch in text)
         if letters < 2:
             continue
-        
+
         if rotation not in rotations:
             rotations[rotation] = []
         rotations[rotation].append(c)
-    
+
     scores = {}
     for rotation, items in rotations.items():
         score = 0
@@ -2554,55 +2876,55 @@ def choose_best_rotation(candidates):
             text = c["text"]
             confidence = c["confidence"]
             letters = sum(ch.isalpha() for ch in text)
-            
+
             score += confidence * letters
             if len(text) >= 5:
                 score += 3
             if len(text.split()) >= 2:
                 score += 2
-        
+
         scores[rotation] = score
-    
+
     if not scores:
         return "0"
-    
+
     best_rotation = max(scores, key=scores.get)
     return best_rotation
 
 def clean_medicine_ocr(results):
     """Clean and filter OCR results for medicine"""
     words = []
-    
+
     for item in results:
         if isinstance(item, (list, tuple)) and len(item) >= 3:
             box, text, confidence = item[0], item[1], item[2]
         else:
             text = item.get("text", "") if isinstance(item, dict) else str(item)
             confidence = item.get("confidence", 0) if isinstance(item, dict) else 0
-        
+
         text = text.strip()
         if not text:
             continue
-        
+
         if len(text) < 2:
             continue
-        
+
         letters = sum(c.isalpha() for c in text)
         if letters < 2:
             continue
-        
+
         words.append({
             "text": text,
             "confidence": float(confidence)
         })
-    
+
     return words
 
 def build_medicine_label(filtered):
     """Build final medicine label from filtered OCR results"""
     if not filtered:
         return "NOT DETECTED"
-    
+
     stop_phrases = [
         "medicine:", "medicine", "keep out", "keep out of reach",
         "reach of children", "warning", "warnings", "dosage", "dose",
@@ -2612,52 +2934,52 @@ def build_medicine_label(filtered):
         "each capsule contains", "prescription", "physician", "doctor",
         "for external use", "side effects"
     ]
-    
+
     valid = []
     for item in filtered:
         text = item["text"].strip()
         if not text:
             continue
-        
+
         lower = text.lower()
         if any(phrase in lower for phrase in stop_phrases):
             continue
-        
+
         letters = sum(ch.isalpha() for ch in text)
         if letters < 2:
             continue
-        
+
         valid.append(item)
-    
+
     if not valid:
         return "NOT DETECTED"
-    
+
     final_words = []
     for item in valid:
         text = item["text"].strip()
         if text not in final_words:
             final_words.append(text)
-    
+
     return " ".join(final_words)
 
 def clean_expiry_v2(text):
     """Improved expiry date extraction with comprehensive pattern matching"""
     if not text:
         return "NOT FOUND"
-    
+
     text = text.upper()
-    
+
     # Normalize EXP variations
     text = text.replace("EXP.", "EXP ")
     text = text.replace("EXP:", "EXP ")
     text = text.replace("EXP,", "EXP ")
-    
+
     month_numbers = {
         "JAN": "01", "FEB": "02", "MAR": "03", "APR": "04",
         "MAY": "05", "JUN": "06", "JUL": "07", "AUG": "08",
         "SEP": "09", "OCT": "10", "NOV": "11", "DEC": "12"
     }
-    
+
     # Pattern 1: EXP + MONTH NAME + YEAR
     match = re.search(
         r'\b(?:EXP|EXPIRY)\s*'
@@ -2672,7 +2994,7 @@ def clean_expiry_v2(text):
         if len(year) == 2:
             year = "20" + year
         return f"{month_numbers[month]}/{year}"
-    
+
     # Pattern 2: EXP + MM/YYYY
     match = re.search(
         r'\b(?:EXP|EXPIRY)\s*'
@@ -2687,7 +3009,7 @@ def clean_expiry_v2(text):
         if len(year) == 2:
             year = "20" + year
         return f"{month}/{year}"
-    
+
     # Pattern 3: EXP + MM + OCR NOISE + YYYY
     match = re.search(
         r'\b(?:EXP|EXPIRY)\s*'
@@ -2701,7 +3023,7 @@ def clean_expiry_v2(text):
         month = match.group(1)
         year = match.group(2)
         return f"{month}/{year}"
-    
+
     # Pattern 4: EXP + MM + YYYY with any single OCR character
     match = re.search(
         r'\b(?:EXP|EXPIRY)\s*'
@@ -2714,7 +3036,7 @@ def clean_expiry_v2(text):
         month = match.group(1)
         year = match.group(2)
         return f"{month}/{year}"
-    
+
     # Pattern 5: MONTH NAME + YEAR WITHOUT EXP
     match = re.search(
         r'\b(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)'
@@ -2728,7 +3050,7 @@ def clean_expiry_v2(text):
         if len(year) == 2:
             year = "20" + year
         return f"{month_numbers[month]}/{year}"
-    
+
     # Pattern 6: NORMAL NUMERIC DATE
     match = re.search(
         r'\b(0?[1-9]|1[0-2])'
@@ -2742,7 +3064,7 @@ def clean_expiry_v2(text):
         if len(year) == 2:
             year = "20" + year
         return f"{month}/{year}"
-    
+
     # Pattern 7: MONTH + YEAR WITH OCR NOISE
     match = re.search(
         r'\b(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)'
@@ -2754,44 +3076,44 @@ def clean_expiry_v2(text):
         month = match.group(1)
         year = match.group(2)
         return f"{month_numbers[month]}/{year}"
-    
+
     return "NOT FOUND"
 
 def extract_expiry_with_rotations(image):
     """Extract expiry date with rotation analysis"""
     if image is None:
         return "NOT FOUND", None, ""
-    
+
     rotations = [
         ("0", image),
         ("90", cv2.rotate(image, cv2.ROTATE_90_CLOCKWISE)),
         ("180", cv2.rotate(image, cv2.ROTATE_180)),
         ("270", cv2.rotate(image, cv2.ROTATE_90_COUNTERCLOCKWISE))
     ]
-    
+
     candidates = []
-    
+
     for angle, rotated_image in rotations:
         if reader is None:
             continue
-            
+
         try:
             results = reader.readtext(
                 rotated_image,
                 detail=1,
                 paragraph=False
             )
-            
+
             texts = []
             for box, text, confidence in results:
                 text = text.strip()
                 if not text:
                     continue
                 texts.append(text)
-            
+
             combined_text = " ".join(texts)
             expiry = clean_expiry_v2(combined_text)
-            
+
             if expiry != "NOT FOUND":
                 confidences = [
                     confidence for box, text, confidence in results
@@ -2801,7 +3123,7 @@ def extract_expiry_with_rotations(image):
                     sum(confidences) / len(confidences)
                     if confidences else 0
                 )
-                
+
                 candidates.append({
                     "rotation": angle,
                     "expiry": expiry,
@@ -2810,12 +3132,12 @@ def extract_expiry_with_rotations(image):
                 })
         except Exception as e:
             logger.debug(f"Expiry rotation {angle} error: {e}")
-    
+
     if candidates:
         best = max(candidates, key=lambda x: x["confidence"])
         logger.info(f"✓ Best expiry: {best['expiry']} at rotation {best['rotation']}")
         return best["expiry"], best["rotation"], best["ocr"]
-    
+
     logger.info("❌ Expiry date not identified")
     return "NOT FOUND", None, ""
 
@@ -2828,13 +3150,13 @@ def process_with_yolo(image_path):
     if not model:
         logger.warning("YOLO model not available, skipping YOLO detection")
         return None, None
-    
+
     try:
         # Resize image if too large
         img = cv2.imread(image_path)
         if img is None:
             return None, None
-        
+
         h, w = img.shape[:2]
         if max(h, w) > 1024:
             scale = 1024 / max(h, w)
@@ -2845,20 +3167,20 @@ def process_with_yolo(image_path):
             temp_path = f"{name}_resized{ext}"
             cv2.imwrite(temp_path, img)
             image_path = temp_path
-        
+
         # Run YOLO prediction
         result = model.predict(image_path, confidence=0.15).json()
         predictions = result.get('predictions', [])
-        
+
         logger.info(f"YOLO found {len(predictions)} predictions")
-        
+
         medicine_region = None
         expiry_region = None
-        
+
         for pred in predictions:
             class_name = pred.get('class', '').lower()
             confidence = pred.get('confidence', 0)
-            
+
             # Get coordinates
             x, y, width, height = pred['x'], pred['y'], pred['width'], pred['height']
             # Add padding around YOLO bounding box
@@ -2872,17 +3194,17 @@ def process_with_yolo(image_path):
             y2 = min(img.shape[0], int(y + height/2) + pad_y)
 
             crop = img[y1:y2, x1:x2]
-            
-            
+
+
             if any(keyword in class_name for keyword in ['name', 'medicine', 'drug', 'product']):
                 medicine_region = crop
                 logger.info(f"Found medicine region with confidence: {confidence}")
             elif any(keyword in class_name for keyword in ['exp', 'expiry', 'date', 'mfg']):
                 expiry_region = crop
                 logger.info(f"Found expiry region with confidence: {confidence}")
-        
+
         return medicine_region, expiry_region
-    
+
     except Exception as e:
         logger.error(f"YOLO processing error: {e}")
         return None, None
@@ -3180,7 +3502,6 @@ def get_doctor_patient_visit(patient_id, visit_id):
 )
 @role_required("doctor")
 def download_patient_visit_pdf(patient_id, visit_id):
-    """Doctor-authenticated route for downloading prescription PDFs."""
     visit = doctor_db.get_patient_visit(patient_id, visit_id)
     if not visit:
         return jsonify({"error": "Visit not found for this patient."}), 404
@@ -3188,49 +3509,6 @@ def download_patient_visit_pdf(patient_id, visit_id):
     if not filename or os.path.basename(filename) != filename:
         return jsonify({"error": "Prescription PDF is unavailable."}), 404
     return send_from_directory(GENERATED_FOLDER, filename, as_attachment=True)
-
-
-@app.route("/prescription/<visit_id>", methods=["GET"])
-def view_prescription_by_visit_id(visit_id):
-    """
-    Public route for patients to view their prescription via QR code.
-    Retrieves prescription using only Visit ID (no authentication required).
-    Opens PDF inline in browser for immediate viewing.
-    """
-    try:
-        # Validate visit_id format (basic security check)
-        if not visit_id or not isinstance(visit_id, str):
-            return jsonify({"error": "Invalid visit ID."}), 400
-        
-        # Get visit by visit_id only (without patient_id requirement)
-        visit = doctor_db.get_visit_by_id(visit_id)
-        
-        if not visit:
-            return render_template('prescription_not_found.html', visit_id=visit_id), 404
-        
-        # Get PDF filename
-        filename = visit.get("pdf_path")
-        if not filename:
-            return jsonify({"error": "Prescription PDF not found."}), 404
-        
-        # Security: Ensure filename is safe (no path traversal)
-        filename = os.path.basename(filename)
-        filepath = os.path.join(GENERATED_FOLDER, filename)
-        
-        if not os.path.exists(filepath):
-            return jsonify({"error": "Prescription PDF file does not exist."}), 404
-        
-        # Return PDF with inline display (opens in browser, not download)
-        return send_from_directory(
-            GENERATED_FOLDER,
-            filename,
-            mimetype='application/pdf',
-            as_attachment=False  # Display inline in browser
-        )
-        
-    except Exception as e:
-        logger.error(f"Error viewing prescription for visit {visit_id}: {e}")
-        return jsonify({"error": "Failed to retrieve prescription."}), 500
 
 
 @app.route("/doctor/interactions/analyze", methods=["POST"])
@@ -3313,9 +3591,22 @@ def process_image():
             name, ext = os.path.splitext(filename)
             unique_filename = f"{name}_{uuid.uuid4().hex[:8]}{ext}"
             filepath = os.path.join(UPLOAD_FOLDER, unique_filename)
-            file.save(filepath)
-
+            training_image_id = None
+            processing_status = "failed"
+            medicine_ocr = ""
             try:
+                file.save(filepath)
+                try:
+                    training_image_id = archive_uploaded_training_image(
+                        filepath,
+                        filename,
+                    )
+                except Exception as archive_error:
+                    logger.exception("Could not archive uploaded image for training")
+                    raise RuntimeError(
+                        "Could not save uploaded image for future training."
+                    ) from archive_error
+
                 logger.info(f"Processing: {filename}")
 
                 image = cv2.imread(filepath)
@@ -3323,7 +3614,6 @@ def process_image():
                     raise ValueError('Could not read image')
 
                 medicine_name = None
-                medicine_ocr = ""
                 expiry_date = "NOT FOUND"
                 expiry_ocr = ""
 
@@ -3334,40 +3624,40 @@ def process_image():
                 # =====================================================
                 if medicine_region is not None:
                     logger.info("Medicine region detected, running OCR pipeline")
-                    
+
                     # Extract candidates using EasyOCR with rotations
                     candidates = extract_medicine_with_easyocr_rotations(medicine_region)
-                    
+
                     # Filter candidates
                     useful = filter_medicine_candidates(candidates)
-                    
+
                     if useful:
                         # Choose best rotation
                         best_rotation = choose_best_rotation(useful)
-                        
+
                         # Get candidates for best rotation
                         best_candidates = [
                             c for c in useful
                             if c["rotation"] == best_rotation
                         ]
-                        
+
                         # Convert to tuples for clean_medicine_ocr
                         ocr_results = [
                                 (c["box"], c["text"], c["confidence"])
                                 for c in best_candidates
                             ]
-                        
+
                         # Clean OCR
                         filtered = clean_medicine_ocr(ocr_results)
-                        
+
                         # Build medicine label
                         medicine_name = build_medicine_label(filtered)
-                        
+
                         # Store medicine OCR text
                         medicine_ocr = " ".join(
                             item["text"] for item in filtered
                         )
-                        
+
                         logger.info(f"Medicine: {medicine_name}")
                         logger.info(f"Medicine OCR: {medicine_ocr}")
 
@@ -3376,7 +3666,7 @@ def process_image():
                 # =====================================================
                 if expiry_region is not None:
                     logger.info("Expiry region detected, running OCR pipeline")
-                    
+
                     # Save debug crop
                     debug_expiry_path = os.path.join(
                         UPLOAD_FOLDER,
@@ -3384,11 +3674,11 @@ def process_image():
                     )
                     cv2.imwrite(debug_expiry_path, expiry_region)
                     logger.info(f"✓ Expiry crop saved: {debug_expiry_path}")
-                    
+
                     # Extract expiry with rotations
                     expiry_date, expiry_rotation, expiry_ocr = extract_expiry_with_rotations(
                         expiry_region
-                    )                    
+                    )
                     logger.info(f"📅 FINAL EXPIRY: {expiry_date}")
 
                 # =====================================================
@@ -3541,6 +3831,7 @@ def process_image():
                         'other_drug_options': [],
                         'error': 'Could not extract medicine information'
                     })
+                processing_status = "processed"
             except Exception as file_error:
                 logger.exception("❌ PROCESSING ERROR for %s", filename)
                 results.append({
@@ -3551,6 +3842,37 @@ def process_image():
                     'other_drug_options': [],
                     'error': str(file_error)
                 })
+
+            result = results[-1]
+            if training_image_id:
+                result["training_image_id"] = training_image_id
+                result["training_archive_status"] = "saved"
+                try:
+                    update_training_image(
+                        training_image_id,
+                        processing_status=processing_status,
+                        extracted_text=medicine_ocr,
+                        medicine_name=result.get("medicine_name"),
+                        brand_name=result.get("brand_name"),
+                        generic_name=result.get("generic_name"),
+                        strength=result.get("strength"),
+                        dosage_form=result.get("dosage_form"),
+                        expiry_date=result.get("expiry_date"),
+                    )
+                except Exception:
+                    logger.exception(
+                        "Could not update metadata for archived image %s",
+                        training_image_id,
+                    )
+                    result["training_archive_status"] = "metadata_error"
+                    result["training_archive_error"] = (
+                        "Image was saved, but its training metadata could not be updated."
+                    )
+            else:
+                result["training_archive_status"] = "failed"
+                result["training_archive_error"] = (
+                    "Image could not be saved for future training."
+                )
 
         return jsonify(results)
 
@@ -3672,22 +3994,23 @@ def update_medicine_api(medicine_id):
         return jsonify({"error": str(error)}), 400
 
     try:
-        quantity = int(data.get('quantity', 0))
-
-        if quantity < 0:
-            return jsonify({"error": "quantity cannot be negative"}), 400
-
-        updated = update_medicine(medicine_id, {
+        medicine_data = {
             "medicine_name": data["medicine_name"],
             "brand_name": data.get("brand_name"),
             "generic_name": data.get("generic_name"),
             "strength": data.get("strength"),
             "dosage_form": data.get("dosage_form"),
             "expiry_date": expiry_date,
-            "quantity": quantity,
             "row_number": data.get("row_number"),
             "column_number": data.get("column_number")
-        })
+        }
+        if "quantity" in data:
+            quantity = int(data["quantity"])
+            if quantity < 0:
+                return jsonify({"error": "quantity cannot be negative"}), 400
+            medicine_data["quantity"] = quantity
+
+        updated = update_medicine(medicine_id, medicine_data)
 
         if not updated:
             return jsonify({
@@ -3759,6 +4082,24 @@ def delete_medicine_api(medicine_id):
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.route('/medicine/<int:medicine_id>/expired', methods=['DELETE'])
+@role_required("medical_staff", api=True)
+def delete_expired_medicine_api(medicine_id):
+    try:
+        deleted = delete_expired_medicine(medicine_id)
+        if deleted is None:
+            return jsonify({"error": "Medicine not found."}), 404
+        if not deleted:
+            return jsonify({
+                "error": "This medicine is no longer expired and was not deleted."
+            }), 409
+        return jsonify({"message": "Expired medicine removed successfully."}), 200
+    except Exception:
+        logger.exception("Could not remove expired medicine %s", medicine_id)
+        return jsonify({"error": "Could not remove the expired medicine."}), 500
+
 
 # ==================== SALES API ====================
 
@@ -3862,6 +4203,39 @@ def expired_medicines_api():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route('/medicines/expiry-alerts', methods=['GET'])
+@role_required("medical_staff", api=True)
+def expiry_alerts_api():
+    try:
+        days = int(request.args.get('days', app.config["EXPIRY_WARNING_DAYS"]))
+    except ValueError:
+        return jsonify({"error": "days must be a non-negative number."}), 400
+    if days < 0:
+        return jsonify({"error": "days cannot be negative"}), 400
+
+    try:
+        expired = get_expired_medicines()
+        expiring = get_expiring_medicines(days)
+        medicines = sorted(
+            expired + expiring,
+            key=lambda medicine: (
+                normalize_expiry(medicine["expiry_date"]),
+                medicine["id"],
+            ),
+        )
+        return jsonify({
+            "count": len(medicines),
+            "days": days,
+            "expired_count": len(expired),
+            "expiring_count": len(expiring),
+            "expired_medicines": expired,
+            "medicines": medicines,
+        }), 200
+    except Exception:
+        logger.exception("Could not load expiry alerts.")
+        return jsonify({"error": "Could not load expiry alerts."}), 500
+
+
 @app.route('/medicines/low-stock', methods=['GET'])
 @role_required("medical_staff", api=True)
 def low_stock_medicines_api():
@@ -3928,10 +4302,10 @@ if __name__ == '__main__':
     print("\n🌐 Web interface: http://localhost:5000")
     print("📡 API endpoint: http://localhost:5000/process")
     print("\n" + "="*60 + "\n")
-    
+
     # Use environment variables for debug mode and host
-    debug_mode = os.getenv("FLASK_DEBUG", "TRUE").lower() == "true"
-    host = os.getenv("FLASK_HOST", "127.0.0.1")
+    debug_mode = os.getenv("FLASK_DEBUG", "False").lower() == "true"
+    host = os.getenv("FLASK_HOST", "0.0.0.0")
     port = int(os.getenv("FLASK_PORT", "5000"))
-    
+
     app.run(debug=debug_mode, host=host, port=port)
