@@ -2664,3 +2664,177 @@ tbody tr:hover { background: #f7fbfb; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
+
+/* Visual polish layer */
+html {
+  background: #edf4f6;
+}
+
+body {
+  background:
+    radial-gradient(ellipse at 8% 0%, rgba(58, 155, 151, .08), transparent 30rem),
+    radial-gradient(ellipse at 100% 12%, rgba(61, 132, 178, .07), transparent 32rem),
+    #f3f7f8;
+}
+
+.app-shell {
+  padding-bottom: 56px;
+}
+
+.app-header {
+  border-bottom-color: #e0eaed;
+}
+
+html body .brand-mark {
+  background: linear-gradient(145deg, #164b69, #137b79);
+  box-shadow: 0 8px 18px rgba(19, 94, 105, .2);
+}
+
+.brand-name {
+  color: #173c57;
+}
+
+html body .sidebar {
+  border-color: #e1eaed;
+  background: rgba(255, 255, 255, .92);
+  box-shadow: 0 8px 24px rgba(25, 62, 82, .055);
+}
+
+.nav-item {
+  min-height: 45px;
+  border-radius: 12px;
+}
+
+.nav-item.active {
+  background: linear-gradient(100deg, #e7f4f2, #edf6f7);
+  color: #116c70;
+}
+
+.section-heading {
+  margin-bottom: 25px;
+}
+
+.section-heading h1 {
+  color: #173c57;
+}
+
+.eyebrow {
+  color: #117d79;
+}
+
+.content-card,
+.stat-card,
+.results-container {
+  border-color: #e1eaed;
+  box-shadow: 0 5px 18px rgba(25, 62, 82, .045);
+}
+
+.content-card {
+  border-radius: 18px;
+}
+
+.content-card:hover {
+  border-color: #d3e4e6;
+  box-shadow: 0 12px 28px rgba(25, 62, 82, .075);
+}
+
+.stat-card {
+  border-radius: 17px;
+  background: linear-gradient(155deg, #fff, #fbfdfd);
+}
+
+.stat-value {
+  color: #174e67;
+}
+
+.primary-button,
+.generate-btn,
+.extract-btn,
+.quick-action {
+  background: linear-gradient(135deg, #176b76, #167f7c);
+}
+
+.primary-button:hover,
+.extract-btn:hover:not(:disabled),
+.generate-btn:hover:not(:disabled) {
+  background: linear-gradient(135deg, #125861, #116d6a);
+}
+
+.secondary-button,
+.record-btn,
+.header-login-link {
+  border-color: #d5e3e7;
+}
+
+.upload-zone {
+  border-color: #9dc8ca;
+  background:
+    radial-gradient(circle at 50% 20%, rgba(50, 146, 145, .08), transparent 58%),
+    #f6fbfb;
+}
+
+.upload-preview {
+  background: #fff;
+  box-shadow: 0 5px 16px rgba(29, 61, 79, .08);
+}
+
+input,
+select,
+textarea {
+  border-color: #d7e3e8;
+}
+
+.patient-details-grid > div,
+.patient-search-result,
+.visit-history-card {
+  border-color: #e1eaed;
+}
+
+.patient-summary {
+  background: linear-gradient(100deg, #e9f5f3, #eff7f8);
+}
+
+.prescription-entry-panel {
+  border-color: #e1eaed;
+  background: linear-gradient(145deg, #fbfdfd, #f5f9fa);
+}
+
+.table-wrapper {
+  border-color: #e1eaed;
+  border-radius: 13px;
+}
+
+tbody tr:hover {
+  background: #f2f8f8;
+}
+
+.role-button:first-child {
+  border-color: #176b76;
+  background: linear-gradient(135deg, #176b76, #167f7c);
+}
+
+.role-button:first-child:hover {
+  background: linear-gradient(135deg, #125861, #116d6a);
+}
+
+.auth-card {
+  border-color: #deeaed;
+  box-shadow: 0 24px 64px rgba(21, 49, 73, .12);
+}
+
+@media (max-width: 760px) {
+  html body .sidebar {
+    background: rgba(255, 255, 255, .96);
+  }
+}
+
+@media (max-width: 560px) {
+  .content-card,
+  .doctor-workflow-card {
+    border-radius: 15px;
+  }
+
+  .section-heading {
+    margin-bottom: 18px;
+  }
+}

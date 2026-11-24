@@ -178,6 +178,7 @@ if (extractPrescriptionBtn) {
         const details = document.createElement('p');
         details.textContent = [
           `Dosage: ${medicine.dosage || 'Not specified'}`,
+          `Dose M-A-E-B: ${medicine.dose_schedule || 'Not specified'}`,
           `Frequency: ${medicine.frequency || 'Not specified'}`,
           `Duration: ${medicine.duration || 'Not specified'}`,
           `Timing: ${medicine.timing || 'Not specified'}`,

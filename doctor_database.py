@@ -233,6 +233,22 @@ def get_patient_history(patient_id):
     finally:
         connection.close()
 
+def get_visit_by_id(visit_id):
+    connection = get_connection()
+    try:
+        visit = connection.execute(
+            """
+            SELECT visit_id, patient_id, doctor_id, visit_date,
+                   diagnosis, notes, pdf_path, created_at
+            FROM visits
+            WHERE visit_id = ?
+            """,
+            (visit_id,),
+        ).fetchone()
+
+        return dict(visit) if visit else None
+    finally:
+        connection.close()
 
 def get_patient_visit(patient_id, visit_id):
     connection = get_connection()

@@ -178,6 +178,54 @@ def test_visits_keep_patient_doctor_and_pdf_links_and_old_medicines_are_not_copi
     assert len(list(generated_folder.glob("*.pdf"))) == 2
 
 
+def test_qr_url_returns_saved_prescription_pdf(doctor_client):
+    client, _ = doctor_client
+    patient = register_patient(client)
+
+    response = create_visit(
+        client,
+        patient["patient_id"],
+        [{"name": "QR Medicine", "dosage": "10 mg"}],
+    )
+
+    assert response.status_code == 200
+    qr_url = response.get_json()["qr_url"]
+    qr_path = urlsplit(qr_url).path
+    qr_response = client.get(qr_path)
+
+    assert qr_path.startswith("/prescription/view/")
+    assert "127.0.0.1" not in qr_url
+    assert "localhost" not in qr_url
+    assert qr_response.status_code == 200
+    assert qr_response.mimetype == "application/pdf"
+    assert qr_response.data.startswith(b"%PDF")
+
+
+def test_free_text_generation_passes_dose_schedule_to_pdf(doctor_client, monkeypatch):
+    client, _ = doctor_client
+    patient = register_patient(client)
+    captured = {}
+
+    def capture_pdf_data(data, filepath):
+        captured["medicines"] = data["medicines"]
+        Path(filepath).write_bytes(b"%PDF-1.4 test prescription")
+
+    monkeypatch.setattr(app_module, "generate_prescription_pdf", capture_pdf_data)
+    response = client.post(
+        "/generate-prescription",
+        json={
+            "patient_id": patient["patient_id"],
+            "text": (
+                "Paracetamol 500 mg one zero one zero for 5 days "
+                "after food Morning Evening"
+            ),
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured["medicines"][0]["dose_schedule"] == "1-0-1-0"
+
+
 def test_sms_sends_google_drive_link_to_patient(doctor_client, monkeypatch):
     client, _ = doctor_client
     patient = register_patient(client, name="SMS Patient", mobile="9876500010")
