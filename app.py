@@ -44,14 +44,8 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import pytesseract
-# Initialize EasyOCR
-try:
-    import easyocr
-    reader = easyocr.Reader(['en'], gpu=False)
-    print("EasyOCR initialized successfully")
-except Exception as e:
-    print(f"EasyOCR initialization failed: {e}")
-    reader = None
+# EasyOCR is initialized later, after environment variables are loaded.
+reader = None
 try:
     from google import genai
 except Exception:
@@ -195,13 +189,18 @@ TRAINING_IMAGES_FOLDER = os.path.join(
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(GENERATED_FOLDER, exist_ok=True)
 
-# Initialize EasyOCR
-try:
-    reader = easyocr.Reader(['en'], gpu=False)
-    logger.info("✓ EasyOCR initialized successfully")
-except Exception as e:
-    logger.error(f"✗ EasyOCR initialization failed: {e}")
+# Initialize EasyOCR only when enabled.
+if os.getenv("ENABLE_EASYOCR", "true").lower() == "true":
+    try:
+        import easyocr
+        reader = easyocr.Reader(['en'], gpu=False)
+        logger.info("EasyOCR initialized successfully")
+    except Exception as e:
+        logger.error(f"EasyOCR initialization failed: {e}")
+        reader = None
+else:
     reader = None
+    logger.info("EasyOCR disabled by configuration")
 
 # Configure Tesseract path
 def setup_tesseract():
