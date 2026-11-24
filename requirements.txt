@@ -11,7 +11,6 @@ requests==2.31.0
 Werkzeug==2.3.7
 Pillow==10.1.0
 fpdf==1.7.2
-qrcode==7.3.1
 python-dotenv==1.2.1
 google-genai
 google-api-python-client

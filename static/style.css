@@ -973,7 +973,26 @@ td { color: var(--muted); }
 .expired-medicine-list { display: grid; gap: 10px; }
 .expired-medicine-item { padding: 12px; border: 1px solid #fecaca; border-radius: 6px; background: #fff; }
 .expired-medicine-item strong { color: #7f1d1d; }
+.expired-medicine-item-upcoming { border-color: #fed7aa; background: #fffaf3; }
+.expired-medicine-item-upcoming strong { color: #8a4b08; }
 .expired-medicine-item p { margin: 5px 0 0; color: #475569; font-size: 12px; line-height: 1.6; }
+.expired-medicine-actions { display: flex; justify-content: flex-end; margin-top: 10px; }
+.expired-medicine-remove {
+  padding: 7px 12px;
+  border: 1px solid #b91c1c;
+  border-radius: 7px;
+  background: #fff;
+  color: #991b1b;
+  font-weight: 700;
+  cursor: pointer;
+}
+.expired-medicine-remove:hover { background: #fef2f2; }
+.expired-medicine-remove:disabled { cursor: wait; opacity: .6; }
+.expiry-delete-status { margin: 12px 0; font-size: 13px; font-weight: 650; }
+.expiry-delete-status[hidden] { display: none; }
+.expiry-delete-status[data-state="success"] { color: #176b3a; }
+.expiry-delete-status[data-state="error"] { color: #a61b1b; }
+.expiry-delete-status[data-state="pending"] { color: #704b00; }
 .expiry-status {
   display: inline-block;
   margin: 0 6px;
@@ -2536,6 +2555,8 @@ tbody tr:hover { background: #f7fbfb; }
 .generator-actions { margin-top: 14px; }
 .output .medicine-card { background: #fff; }
 .rx-download-link { border-radius: 9px; }
+.rx-sms-status { margin-top: 12px; padding: 10px 12px; }
+.rx-sms-sent { border-radius: 10px; background: #ecfdf5; color: #166534; }
 .hint { color: #76899b; font-size: 12px; }
 .error { border-radius: 10px; background: #fff0f1; color: #a53d47; }
 

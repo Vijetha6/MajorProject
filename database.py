@@ -379,6 +379,48 @@ def delete_medicine(medicine_id):
     return changed > 0
 
 
+def delete_expired_medicine(medicine_id):
+    if (
+        isinstance(medicine_id, bool)
+        or not isinstance(medicine_id, int)
+        or medicine_id < 1
+    ):
+        raise ValueError("A valid medicine ID is required.")
+
+    conn = get_connection()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        medicine = conn.execute(
+            "SELECT expiry_date FROM medicines WHERE id = ?",
+            (medicine_id,),
+        ).fetchone()
+        if medicine is None:
+            conn.rollback()
+            return None
+
+        try:
+            expiry_date = date.fromisoformat(normalize_expiry(medicine["expiry_date"]))
+        except ValueError:
+            conn.rollback()
+            return False
+
+        if expiry_date >= _india_today():
+            conn.rollback()
+            return False
+
+        deleted = conn.execute(
+            "DELETE FROM medicines WHERE id = ?",
+            (medicine_id,),
+        )
+        conn.commit()
+        return deleted.rowcount == 1
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 # ==================== EXPIRING MEDICINES ====================
 
 def get_expiring_medicines(days=30):

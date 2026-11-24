@@ -42,7 +42,7 @@ class PrescriptionValidationTests(unittest.TestCase):
         self.previous_generated_folder = app_module.GENERATED_FOLDER
         app_module.GENERATED_FOLDER = self.output_dir.name
 
-        def write_test_pdf(data, download_url, filepath):
+        def write_test_pdf(data, filepath):
             Path(filepath).write_bytes(b"%PDF-1.4 test")
 
         self.pdf_generator = patch.object(

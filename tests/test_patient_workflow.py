@@ -1,10 +1,12 @@
 from pathlib import Path
 from urllib.parse import urlsplit
+from types import SimpleNamespace
 
 import pytest
 
 import doctor_database
 import app as app_module
+import sms as sms_module
 
 
 @pytest.fixture
@@ -17,7 +19,7 @@ def doctor_client(tmp_path, monkeypatch):
     generated_folder.mkdir()
     monkeypatch.setattr(app_module, "GENERATED_FOLDER", str(generated_folder))
 
-    def write_test_pdf(data, download_url, filepath):
+    def write_test_pdf(data, filepath):
         Path(filepath).write_bytes(b"%PDF-1.4 test prescription")
 
     monkeypatch.setattr(app_module, "generate_prescription_pdf", write_test_pdf)
@@ -174,6 +176,113 @@ def test_visits_keep_patient_doctor_and_pdf_links_and_old_medicines_are_not_copi
     assert wrong_patient_pdf.status_code == 404
     assert wrong_patient_visit.status_code == 404
     assert len(list(generated_folder.glob("*.pdf"))) == 2
+
+
+def test_sms_sends_google_drive_link_to_patient(doctor_client, monkeypatch):
+    client, _ = doctor_client
+    patient = register_patient(client, name="SMS Patient", mobile="9876500010")
+    drive_url = "https://drive.google.com/file/d/test-file/view"
+    sent_messages = []
+    monkeypatch.setattr(app_module, "upload_pdf_to_drive", lambda filepath: drive_url)
+    monkeypatch.setattr(
+        app_module,
+        "send_sms",
+        lambda **kwargs: sent_messages.append(kwargs),
+    )
+
+    response = create_visit(
+        client,
+        patient["patient_id"],
+        [{"name": "Medicine SMS", "dosage": "10 mg"}],
+    )
+    assert response.status_code == 200
+    response_data = response.get_json()
+
+    assert response_data["drive_url"] == drive_url
+    assert sent_messages[0]["download_url"] == drive_url
+    assert response_data["sms_sent"] is True
+    assert response_data["sms_error"] is None
+
+
+def test_sms_failure_is_reported_without_losing_saved_prescription(
+    doctor_client,
+    monkeypatch,
+):
+    client, _ = doctor_client
+    patient = register_patient(client)
+    monkeypatch.setattr(
+        app_module,
+        "upload_pdf_to_drive",
+        lambda filepath: "https://drive.google.com/file/d/test-file/view",
+    )
+
+    def fail_to_send_sms(**kwargs):
+        raise RuntimeError("SMS provider unavailable")
+
+    monkeypatch.setattr(app_module, "send_sms", fail_to_send_sms)
+    response = create_visit(
+        client,
+        patient["patient_id"],
+        [{"name": "Medicine SMS", "dosage": "10 mg"}],
+    )
+
+    assert response.status_code == 200
+    assert response.get_json()["sms_sent"] is False
+    assert "SMS could not be sent" in response.get_json()["sms_error"]
+    history = client.get(
+        f"/doctor/patients/{patient['patient_id']}/history"
+    ).get_json()["visits"]
+    assert len(history) == 1
+
+
+def test_sms_is_not_sent_when_drive_upload_fails(doctor_client, monkeypatch):
+    client, _ = doctor_client
+    patient = register_patient(client)
+    sent_messages = []
+    monkeypatch.setattr(app_module, "send_sms", lambda **kwargs: sent_messages.append(kwargs))
+
+    response = create_visit(
+        client,
+        patient["patient_id"],
+        [{"name": "Medicine SMS", "dosage": "10 mg"}],
+    )
+
+    assert response.status_code == 200
+    assert response.get_json()["sms_sent"] is False
+    assert "Google Drive link is unavailable" in response.get_json()["sms_error"]
+    assert sent_messages == []
+
+
+def test_sms_uses_configured_twilio_sender_and_includes_drive_link(monkeypatch):
+    monkeypatch.setenv("TWILIO_ACCOUNT_SID", "test-account")
+    monkeypatch.setenv("TWILIO_AUTH_TOKEN", "test-token")
+    monkeypatch.setenv("TWILIO_PHONE_NUMBER", "+15005550006")
+    sent = {}
+
+    class FakeMessages:
+        def create(self, **kwargs):
+            sent.update(kwargs)
+            return SimpleNamespace(sid="SM-test")
+
+    class FakeClient:
+        def __init__(self, account_sid, auth_token):
+            assert account_sid == "test-account"
+            assert auth_token == "test-token"
+            self.messages = FakeMessages()
+
+    monkeypatch.setattr(sms_module, "Client", FakeClient)
+    link = "https://drive.google.com/file/d/test-file/view"
+
+    message_sid = sms_module.send_sms(
+        "Test Patient",
+        "+919876543210",
+        link,
+    )
+
+    assert message_sid == "SM-test"
+    assert sent["from_"] == "+15005550006"
+    assert sent["to"] == "+919876543210"
+    assert link in sent["body"]
 
 
 def test_mobile_change_keeps_history_attached_to_patient_id(doctor_client):

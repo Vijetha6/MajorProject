@@ -108,6 +108,34 @@ def test_expiry_warning_api_uses_seven_day_default_and_allows_override(inventory
     assert expired_medicines[0]["days_remaining"] == -1
 
 
+def test_expiry_alerts_are_combined_and_sorted_by_actual_expiry_date(inventory_db):
+    for medicine_name, expiry_date in (
+        ("Expires next week", "2027-08-08"),
+        ("Expired yesterday", "2027-07-31"),
+        ("Expired first", "2027-06-30"),
+        ("Expires today", "2027-08-01"),
+        ("Expires tomorrow", "2027-08-02"),
+    ):
+        database.add_medicine({
+            "medicine_name": medicine_name,
+            "expiry_date": expiry_date,
+        })
+
+    response = staff_client().get("/medicines/expiry-alerts")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["expired_count"] == 2
+    assert payload["expiring_count"] == 3
+    assert [medicine["medicine_name"] for medicine in payload["medicines"]] == [
+        "Expired first",
+        "Expired yesterday",
+        "Expires today",
+        "Expires tomorrow",
+        "Expires next week",
+    ]
+
+
 def test_expired_medicines_include_details_and_skip_today_future_or_invalid_dates(inventory_db):
     with sqlite3.connect(inventory_db) as connection:
         connection.executemany(
@@ -188,10 +216,58 @@ def test_expired_medicine_results_reflect_inventory_updates_and_removals(invento
     assert database.get_expired_medicines() == []
 
 
+def test_staff_can_remove_only_the_selected_expired_medicine(inventory_db):
+    expired_id = database.add_medicine({
+        "medicine_name": "Same medicine",
+        "expiry_date": "2027-07-31",
+        "quantity": 3,
+    })
+    current_id = database.add_medicine({
+        "medicine_name": "Same medicine",
+        "expiry_date": "2027-08-08",
+        "quantity": 8,
+    })
+    client = staff_client()
+
+    response = client.delete(f"/medicine/{expired_id}/expired")
+
+    assert response.status_code == 200
+    assert response.get_json()["message"] == "Expired medicine removed successfully."
+    assert database.get_medicine(expired_id) is None
+    assert database.get_medicine(current_id)["quantity"] == 8
+    assert [medicine["id"] for medicine in client.get("/medicines").get_json()["medicines"]] == [
+        current_id
+    ]
+    assert client.get("/medicines/expiry-alerts").get_json()["expired_count"] == 0
+
+    not_expired = client.delete(f"/medicine/{current_id}/expired")
+    assert not_expired.status_code == 409
+    assert database.get_medicine(current_id) is not None
+
+
+def test_removing_expired_medicines_requires_medical_staff(inventory_db):
+    medicine_id = database.add_medicine({
+        "medicine_name": "Expired medicine",
+        "expiry_date": "2027-07-31",
+    })
+
+    assert medicine_app.app.test_client().delete(
+        f"/medicine/{medicine_id}/expired"
+    ).status_code == 401
+
+    doctor_client = medicine_app.app.test_client()
+    with doctor_client.session_transaction() as session:
+        session["role"] = "doctor"
+    assert doctor_client.delete(
+        f"/medicine/{medicine_id}/expired"
+    ).status_code == 403
+    assert database.get_medicine(medicine_id) is not None
+
+
 def test_expired_medicine_modal_is_only_rendered_for_medical_staff(inventory_db):
     staff_dashboard = staff_client().get("/staff/dashboard")
     assert b'id="expiredMedicineModal"' in staff_dashboard.data
-    assert b"EXPIRED MEDICINES ALERT" in staff_dashboard.data
+    assert b"EXPIRY ALERT" in staff_dashboard.data
     assert b'id="closeExpiredMedicineModal"' in staff_dashboard.data
 
     public_dashboard = medicine_app.app.test_client().get("/")

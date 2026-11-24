@@ -22,6 +22,7 @@ from database import (
     update_medicine,
     update_quantity,
     delete_medicine,
+    delete_expired_medicine,
     get_expiring_medicines,
     get_expired_medicines,
     get_low_stock_medicines,
@@ -54,9 +55,9 @@ from drive_upload import upload_pdf_to_drive
 
 try:
     from sms import send_sms
-except Exception:
+except ImportError:
     def send_sms(patient_name, phone_number, download_url):
-        return None
+        raise RuntimeError("SMS support is unavailable; install the configured SMS provider.")
 from flask import Flask, request, jsonify, render_template, send_from_directory, session, redirect, url_for
 from werkzeug.utils import secure_filename
 from difflib import get_close_matches
@@ -84,29 +85,6 @@ except Exception:
         def output(self, filepath):
             with open(filepath, 'wb') as f:
                 f.write(b'')
-        def image(self, *args, **kwargs):
-            return None
-try:
-    import qrcode
-except Exception:
-    # Minimal qrcode stub using PIL for tests
-    import types as _types
-    from PIL import Image as _Image
-
-    qrcode = _types.SimpleNamespace()
-    qrcode.constants = _types.SimpleNamespace(ERROR_CORRECT_H=1)
-
-    class _QR:
-        def __init__(self, **kwargs):
-            self.data = None
-        def add_data(self, d):
-            self.data = d
-        def make(self, fit=True):
-            return True
-        def make_image(self, fill_color="black", back_color="white"):
-            return _Image.new('RGB', (120, 120), color=back_color)
-
-    qrcode.QRCode = _QR
 from PIL import Image, ImageDraw, ImageFont
 
 load_dotenv()
@@ -151,7 +129,6 @@ if not os.getenv("FLASK_SECRET_KEY"):
     logger.warning("FLASK_SECRET_KEY is unset; sessions will not survive application restarts.")
 init_database()
 doctor_db.init_database()
-
 
 def role_required(role, api=False):
     def decorator(view):
@@ -302,6 +279,35 @@ COMMON_MEDICINES = [
     'omeprazole', 'pantoprazole', 'gastro'
 ]
 
+OPENFDA_INGREDIENT_SYNONYMS = {
+    "paracetamol": "acetaminophen",
+    "acetaminophen": "paracetamol",
+}
+
+
+def build_openfda_search_candidates(medicine_name):
+    if not isinstance(medicine_name, str):
+        return []
+
+    normalized_name = re.sub(r"\s+", " ", medicine_name).strip()
+    if not normalized_name:
+        return []
+
+    match = re.match(r"^([A-Za-z]+)(.*)$", normalized_name)
+    if not match:
+        return [normalized_name]
+
+    ingredient, suffix = match.groups()
+    synonym = OPENFDA_INGREDIENT_SYNONYMS.get(ingredient.casefold())
+    if not synonym:
+        return [normalized_name]
+
+    synonym_candidate = f"{synonym}{suffix}"
+    if synonym_candidate.casefold() == normalized_name.casefold():
+        return [normalized_name]
+    return [normalized_name, synonym_candidate]
+
+
 NOISE_WORDS = [ 
     'download', 'price', 'gas', 'station', 'stations',
     'zone', 'bandra', '3 is on', 'in a', 'day for',
@@ -387,6 +393,482 @@ def word_to_number(text):
         converted.append(mapping.get(w.lower(), w))
 
     return " ".join(converted)
+
+
+def normalize_duration_value(value):
+    if not value:
+        return "As directed"
+    value = value.strip().lower()
+    replacements = {
+        "one": "1",
+        "two": "2",
+        "three": "3",
+        "four": "4",
+        "five": "5",
+        "six": "6",
+        "seven": "7",
+        "eight": "8",
+        "nine": "9",
+        "ten": "10",
+    }
+    for word, number in replacements.items():
+        value = re.sub(rf"\b{word}\b", number, value)
+    value = re.sub(r"\s+", " ", value)
+    value = value.replace("day ", "day ")
+    return value
+
+def extract_timing_values(text):
+    timing = []
+    for slot in ["Morning", "Afternoon", "Evening", "Bedtime"]:
+        if re.search(rf"\b{slot.lower()}\b", text, re.IGNORECASE):
+            timing.append(slot)
+    return timing
+
+def is_likely_medicine_name(text):
+    """Check if text is likely a medicine name vs conversation/advice"""
+    if not text or len(text.strip()) < 2:
+        return False
+    
+    text_lower = text.lower().strip()
+    
+    # Exclude common conversation phrases
+    conversation_phrases = [
+        'hello', 'hi', 'doctor speaking', 'i am', 'the patient', 'should', 
+        'take', 'adequate', 'rest', 'drink', 'water', 'plenty', 'recording',
+        'completed', 'prescribe', 'also prescribe', 'for the patient',
+        'good morning', 'good afternoon', 'good evening', 'thank you',
+        'please', 'kindly', 'avoid', 'continue', 'stop', 'follow up'
+    ]
+    
+    for phrase in conversation_phrases:
+        if phrase in text_lower:
+            return False
+    
+    # Exclude general advice patterns
+    advice_patterns = [
+        r'^(take|drink|avoid|continue|stop|get|do|don\'t)\s+',
+        r'\b(rest|water|exercise|sleep|diet|food)\b',
+        r'^(the patient|patient should|you should)',
+        r'(recording|transcript|completed|finished)'
+    ]
+    
+    for pattern in advice_patterns:
+        if re.search(pattern, text_lower):
+            return False
+    
+    # Check if it looks like a medicine name (contains known medicine or has medicine-like pattern)
+    known_medicine = any(med in text_lower for med in COMMON_MEDICINES)
+    has_dosage = bool(re.search(r'\d+\s*(?:mg|ml|mcg|g)\b', text_lower))
+    has_frequency = bool(re.search(r'\b(once|twice|thrice|daily|weekly)\b', text_lower))
+    
+    # If it has both a known medicine pattern and dosage/frequency info, likely a medicine
+    if known_medicine or (has_dosage and has_frequency):
+        return True
+    
+    # Check for medicine-like structure: word + number + unit
+    if re.search(r'^[A-Za-z]{3,}(?:in|ol|ne|zine|cillin|mycin|pam|lol|pine|pril|sartan|tide|mine|dine|lone)\b', text_lower):
+        return True
+    
+    return False
+
+def extract_medicines_from_voice_transcript(text):
+    """
+    Intelligently extract medicine prescriptions from voice transcript.
+    Separates actual medicines from conversation and general advice.
+    """
+    if not text:
+        return []
+    
+    text = clean_prescription_text(word_to_number(text))
+    
+    # Split by common separators but keep context
+    segments = re.split(r'(?:\.|\.|also prescribe|and prescribe|prescribe)\s+', text, flags=re.IGNORECASE)
+    
+    medicines = []
+    general_advice = []
+    
+    for segment in segments:
+        segment = segment.strip()
+        if not segment or len(segment) < 5:
+            continue
+        
+        segment_lower = segment.lower()
+        
+        # Check if this segment contains medicine-like information
+        has_medicine_indicator = (
+            any(med in segment_lower for med in COMMON_MEDICINES) or
+            re.search(r'\d+\s*(?:mg|ml|mcg|g)\b', segment_lower) or
+            re.search(r'\b(tablet|capsule|syrup|injection)\b', segment_lower)
+        )
+        
+        # Check if it's general advice
+        is_advice = (
+            re.search(r'^(take|drink|avoid|get|do)\s+(adequate|plenty|rest|water|exercise)', segment_lower) or
+            re.search(r'(should rest|should drink|should avoid|should take care)', segment_lower) or
+            'recording completed' in segment_lower or
+            'hello doctor' in segment_lower
+        )
+        
+        if is_advice:
+            general_advice.append(segment)
+            continue
+        
+        if not has_medicine_indicator:
+            continue
+        
+        # Extract medicine details from this segment
+        medicine_data = parse_medicine_segment(segment)
+        if medicine_data and is_likely_medicine_name(medicine_data['name']):
+            medicines.append(medicine_data)
+    
+    return medicines
+
+def parse_medicine_segment(segment):
+    """Parse a single segment that likely contains a medicine prescription"""
+    line = segment.strip()
+    line_lower = line.lower()
+    
+    # Extract medicine name - look for word before dosage or frequency
+    med_match = re.match(
+        r'^(?:prescribe\s+)?([A-Za-z][A-Za-z .()-]+?)(?=\s+(?:\d+(?:/\d+)?\s*(?:mg|ml|mcg|g)|once|twice|thrice|daily|weekly))',
+        line,
+        re.IGNORECASE
+    )
+    
+    if not med_match:
+        # Try to find known medicine names
+        for known_med in COMMON_MEDICINES:
+            if known_med in line_lower:
+                med_match = re.search(rf'\b({known_med})\b', line, re.IGNORECASE)
+                if med_match:
+                    break
+    
+    if not med_match:
+        return None
+    
+    medicine = med_match.group(1).strip()
+    
+    # Clean up medicine name
+    medicine = re.sub(r'\b(prescribe|prescribed|tablet|capsule|syrup)\b', '', medicine, flags=re.IGNORECASE).strip()
+    
+    if not medicine or len(medicine) < 2:
+        return None
+    
+    # Extract dosage
+    dosage_match = re.search(r'(\d+(?:/\d+)?\s*(?:mg|ml|mcg|g|milligram|milligrams|mill))', line, re.IGNORECASE)
+    dosage = dosage_match.group(1).strip() if dosage_match else "Dose not specified"
+    
+    # Normalize dosage
+    dosage = re.sub(r'\bmilligram(?:s)?\b', 'mg', dosage, flags=re.IGNORECASE)
+    dosage = re.sub(r'\bmill\b', 'mg', dosage, flags=re.IGNORECASE)
+    
+    # Extract frequency
+    frequency = "As directed"
+    if re.search(r'\b(?:once|1|one)\s+(?:daily|a day|per day|in a day)\b', line_lower):
+        frequency = "Once daily"
+    elif re.search(r'\b(?:twice|2|two)\s+(?:daily|a day|per day|in a day)\b', line_lower):
+        frequency = "Twice daily"
+    elif re.search(r'\b(?:thrice|3|three)\s+(?:daily|a day|per day|in a day)\b', line_lower):
+        frequency = "Thrice daily"
+    elif re.search(r'\b(?:four times|4 times)\s+(?:daily|a day|per day)\b', line_lower):
+        frequency = "Four times daily"
+    
+    # Extract duration
+    duration = "As directed"
+    dur_match = re.search(
+        r'for\s+((?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s*(?:day|days|week|weeks|month|months))',
+        line_lower
+    )
+    if dur_match:
+        duration = normalize_duration_value(dur_match.group(1))
+    
+    # Extract timing
+    timing = extract_timing_values(line)
+    
+    # Extract food instruction
+    food_instruction = ''
+    food_match = re.search(r'(after food|before food|with food|empty stomach|before meal|after meal)', line_lower)
+    if food_match:
+        food_instruction = food_match.group(1).strip().title()
+    
+    # Extract special instructions (excluding medicine name, dosage, frequency, etc.)
+    instructions = line
+    instructions = re.sub(rf'^{re.escape(medicine)}', '', instructions, flags=re.IGNORECASE)
+    instructions = re.sub(re.escape(dosage), '', instructions, flags=re.IGNORECASE)
+    instructions = re.sub(rf'\b{re.escape(frequency.lower())}\b', '', instructions, flags=re.IGNORECASE)
+    instructions = re.sub(r'\bfor\s+.*?\b(?:day|days|week|weeks|month|months)\b', '', instructions, flags=re.IGNORECASE)
+    instructions = re.sub(
+        r'\b(?:prescribe|prescribed|morning|afternoon|evening|bedtime|after food|before food|with food|empty stomach|take|tablet|tab|capsule|cap|daily|weekly)\b',
+        ' ',
+        instructions,
+        flags=re.IGNORECASE
+    )
+    instructions = re.sub(r'[\s,;:-]+', ' ', instructions).strip()
+    
+    if not instructions or len(instructions) < 3:
+        instructions = ''
+    
+    return {
+        "name": medicine.title(),
+        "dosage": dosage,
+        "frequency": frequency,
+        "duration": duration,
+        "timing": timing,
+        "food_instruction": food_instruction,
+        "special_instructions": instructions,
+        "instructions": instructions,
+    }
+
+def extract_prescription_with_gemini(prescription_text):
+    """
+    Use Gemini to intelligently extract structured medicine data from free-form prescription text.
+    Handles natural doctor speech patterns, multiple medicines, context across sentences,
+    corrections, and separates medicines from general advice.
+    
+    Returns:
+        dict: {
+            "medicines": [...],
+            "general_advice": [...],
+            "extraction_source": "gemini" or "fallback"
+        }
+    """
+    if not prescription_text or not prescription_text.strip():
+        return {
+            "medicines": [],
+            "general_advice": [],
+            "extraction_source": "fallback",
+            "error": "Empty prescription text"
+        }
+    
+    # Check if Gemini is available
+    if client is None or not GEMINI_API_KEY:
+        logger.warning("Gemini not available, using fallback parser")
+        fallback_medicines = extract_medicines_from_voice_transcript(prescription_text)
+        return {
+            "medicines": fallback_medicines,
+            "general_advice": [],
+            "extraction_source": "fallback",
+            "note": "Intelligent extraction unavailable. Using pattern-based fallback."
+        }
+    
+    # Prepare Gemini prompt for intelligent extraction
+    prompt = f"""You are a medical prescription extraction assistant. Your task is to extract structured medicine information from natural doctor speech or typed prescription text.
+
+PRESCRIPTION TEXT:
+{prescription_text}
+
+IMPORTANT INSTRUCTIONS:
+
+1. UNDERSTAND CONTEXT ACROSS SENTENCES:
+   - When a doctor says "Prescribe Paracetamol 500 mg. Take one tablet morning and evening. Continue for five days. After food."
+   - ALL these sentences refer to ONE medicine (Paracetamol).
+   - Do NOT create separate medicines for each sentence.
+   - Combine information from multiple sentences that refer to the same medicine.
+
+2. HANDLE CORRECTIONS:
+   - If the doctor says "for five days. Actually, make that three days", use THREE days (latest value).
+   - The most recent explicit correction overrides earlier values.
+
+3. DISTINGUISH MEDICINES FROM CONVERSATION:
+   - Extract ONLY actual medicine prescriptions.
+   - DO NOT treat these as medicines:
+     * Greetings: "Hello", "Good morning", "Doctor speaking"
+     * Closing statements: "Thank you", "That completes the prescription", "Recording completed"
+     * General advice: "Drink plenty of water", "Get adequate rest", "Maintain a healthy diet"
+     * Instructions without medicine: "Take adequate rest"
+
+4. GENERAL PATIENT ADVICE:
+   - Extract general health advice separately (not as medicines).
+   - Examples: "Drink plenty of water", "Get adequate rest", "Avoid spicy food"
+
+5. REQUIRED FIELDS FOR EACH MEDICINE:
+   {{
+     "name": "Medicine name (required)",
+     "dosage": "Strength with unit (e.g., 500 mg)",
+     "frequency": "How often (e.g., Once daily, Twice daily, As directed)",
+     "duration": "How long (e.g., 5 days, 1 week, As directed)",
+     "timing": ["Morning", "Afternoon", "Evening", "Bedtime"],
+     "food_instruction": "After food, Before food, With food, or empty string",
+     "special_instructions": "Any additional notes"
+   }}
+
+6. MEDICAL SAFETY RULES:
+   - NEVER invent medicine names, dosages, or durations.
+   - If information is missing or uncertain, use empty string "" or "As directed".
+   - NEVER assume frequency from timing alone (if only "morning" is mentioned, frequency is "As directed", not "once daily" unless explicitly stated).
+   - NEVER convert uncertain medicine names to different medicines.
+   - Extract only what is explicitly stated or strongly implied.
+
+7. TIMING VALUES:
+   - Use exactly these values: "Morning", "Afternoon", "Evening", "Bedtime"
+   - Return as a JSON array: ["Morning", "Evening"]
+
+8. FREQUENCY NORMALIZATION:
+   - "once a day", "one per day", "once daily" → "Once daily"
+   - "twice a day", "two per day", "twice daily" → "Twice daily"
+   - "thrice a day", "three times a day" → "Thrice daily"
+   - "four times a day" → "Four times daily"
+   - If not specified → "As directed"
+
+9. DURATION NORMALIZATION:
+   - Convert words to numbers: "five days" → "5 days"
+   - "one week" → "1 week"
+   - If not specified → "As directed"
+
+10. DOSAGE NORMALIZATION:
+    - "500 milligrams" → "500 mg"
+    - "10 milligram" → "10 mg"
+    - Keep format: number + space + unit (e.g., "500 mg", "10 ml")
+
+RESPONSE FORMAT:
+Return ONLY valid JSON in this exact structure:
+
+{{
+  "medicines": [
+    {{
+      "name": "Paracetamol",
+      "dosage": "500 mg",
+      "frequency": "Twice daily",
+      "duration": "5 days",
+      "timing": ["Morning", "Evening"],
+      "food_instruction": "After food",
+      "special_instructions": ""
+    }}
+  ],
+  "general_advice": [
+    "Drink plenty of water",
+    "Get adequate rest"
+  ]
+}}
+
+CRITICAL: Return ONLY the JSON object. No markdown code blocks, no explanations, no additional text.
+"""
+    
+    try:
+        response = client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=prompt
+        )
+        
+        response_text = response.text
+        if not isinstance(response_text, str) or not response_text.strip():
+            logger.warning("Gemini returned empty response for prescription extraction")
+            fallback_medicines = extract_medicines_from_voice_transcript(prescription_text)
+            return {
+                "medicines": fallback_medicines,
+                "general_advice": [],
+                "extraction_source": "fallback",
+                "note": "Gemini returned empty response. Using fallback."
+            }
+        
+        # Clean response text
+        response_text = response_text.strip()
+        
+        # Remove markdown code blocks if present
+        if response_text.startswith("```"):
+            response_text = re.sub(r"^```(?:json)?\s*", "", response_text, flags=re.IGNORECASE)
+            response_text = re.sub(r"\s*```$", "", response_text)
+        
+        # Parse JSON
+        try:
+            data = json.loads(response_text)
+        except json.JSONDecodeError as e:
+            logger.warning(f"Gemini returned invalid JSON: {e}")
+            fallback_medicines = extract_medicines_from_voice_transcript(prescription_text)
+            return {
+                "medicines": fallback_medicines,
+                "general_advice": [],
+                "extraction_source": "fallback",
+                "note": "Invalid JSON from Gemini. Using fallback."
+            }
+        
+        # Validate structure
+        if not isinstance(data, dict):
+            logger.warning("Gemini returned non-dict JSON")
+            fallback_medicines = extract_medicines_from_voice_transcript(prescription_text)
+            return {
+                "medicines": fallback_medicines,
+                "general_advice": [],
+                "extraction_source": "fallback",
+                "note": "Invalid structure from Gemini. Using fallback."
+            }
+        
+        # Extract and validate medicines
+        medicines = data.get("medicines", [])
+        if not isinstance(medicines, list):
+            medicines = []
+        
+        # Validate and clean each medicine
+        validated_medicines = []
+        for med in medicines:
+            if not isinstance(med, dict):
+                continue
+            
+            name = str(med.get("name", "")).strip()
+            if not name or len(name) < 2:
+                continue
+            
+            # Skip if it's likely not a medicine (general advice mistaken as medicine)
+            if not is_likely_medicine_name(name):
+                continue
+            
+            dosage = str(med.get("dosage", "")).strip() or "Dose not specified"
+            frequency = str(med.get("frequency", "")).strip() or "As directed"
+            duration = str(med.get("duration", "")).strip() or "As directed"
+            food_instruction = str(med.get("food_instruction", "")).strip()
+            special_instructions = str(med.get("special_instructions", "")).strip()
+            
+            # Validate timing array
+            timing = med.get("timing", [])
+            if not isinstance(timing, list):
+                timing = []
+            
+            valid_timing_slots = {"Morning", "Afternoon", "Evening", "Bedtime"}
+            timing = [str(t).strip() for t in timing if str(t).strip() in valid_timing_slots]
+            
+            validated_medicines.append({
+                "name": name,
+                "dosage": dosage,
+                "frequency": frequency,
+                "duration": duration,
+                "timing": timing,
+                "food_instruction": food_instruction,
+                "special_instructions": special_instructions,
+                "instructions": special_instructions,
+            })
+        
+        # Extract general advice
+        general_advice = data.get("general_advice", [])
+        if not isinstance(general_advice, list):
+            general_advice = []
+        general_advice = [str(advice).strip() for advice in general_advice if isinstance(advice, str) and str(advice).strip()]
+        
+        # If no medicines extracted and text looks like it should have medicines, try fallback
+        if not validated_medicines and any(med in prescription_text.lower() for med in COMMON_MEDICINES):
+            logger.warning("Gemini extracted no medicines but text contains known medicine names. Using fallback.")
+            fallback_medicines = extract_medicines_from_voice_transcript(prescription_text)
+            return {
+                "medicines": fallback_medicines,
+                "general_advice": general_advice,
+                "extraction_source": "fallback",
+                "note": "Gemini extracted no medicines. Using fallback."
+            }
+        
+        return {
+            "medicines": validated_medicines,
+            "general_advice": general_advice,
+            "extraction_source": "gemini"
+        }
+        
+    except Exception as e:
+        logger.exception("Gemini prescription extraction failed")
+        fallback_medicines = extract_medicines_from_voice_transcript(prescription_text)
+        return {
+            "medicines": fallback_medicines,
+            "general_advice": [],
+            "extraction_source": "fallback",
+            "note": f"Gemini error: {str(e)}. Using fallback."
+        }
 
 
 def parse_prescription(text):
@@ -546,7 +1028,7 @@ def create_prescription_filename(patient_name, visit_id):
     return f'prescription_{safe_name}_{safe_visit_id}.pdf'
 
 
-def generate_prescription_pdf(data, download_url, filepath):
+def generate_prescription_pdf(data, filepath):
     pdf = FPDF()
     pdf.add_page()
     pdf.set_auto_page_break(False)
@@ -766,44 +1248,40 @@ def generate_prescription_pdf(data, download_url, filepath):
     # Reset text color
     pdf.set_text_color(0, 0, 0)
 
-
-    qr_x = 155
-    qr_y = 220
-
-    pdf.set_xy(qr_x, qr_y - 6)
-    pdf.set_font("Arial", "B", 8)
-    pdf.cell(35, 5, "Scan to Download", 0, 1, "C")
-
-    # ================= CREATE QR CODE =================
-
-    qr = qrcode.QRCode(
-        version=2,
-        error_correction=qrcode.constants.ERROR_CORRECT_H,
-        box_size=4,
-        border=2
-    )
-
-    qr.add_data(download_url)
-    qr.make(fit=True)
-
-    qr_img = qr.make_image(fill_color="black", back_color="white")
-
-    qr_path = os.path.join(
-        GENERATED_FOLDER,
-        f"qr_{uuid.uuid4().hex[:8]}.png"
-    )
-
-    qr_img.save(qr_path)
-
-    pdf.image(qr_path, x=qr_x, y=qr_y, w=35, h=35)
-
     pdf.set_y(278)
     pdf.set_font('Arial', 'I', 7)
     pdf.set_text_color(100, 100, 100)
     pdf.cell(0, 4, 'This is a system-generated prescription. Valid with digital signature.', 0, 0, 'C')
-
     pdf.output(filepath)
 
+
+@app.route('/extract-prescription', methods=['POST'])
+@role_required("doctor", api=True)
+def extract_prescription():
+    try:
+        payload = request.get_json(silent=True)
+
+        if not isinstance(payload, dict):
+            return jsonify({"error": "Request must be a JSON object."}), 400
+
+        prescription_text = payload.get("text")
+
+        if not isinstance(prescription_text, str) or not prescription_text.strip():
+            return jsonify({"error": "Prescription text is required."}), 400
+
+        result = extract_prescription_with_gemini(prescription_text.strip())
+
+        return jsonify({
+            "success": True,
+            "medicines": result.get("medicines", []),
+            "general_advice": result.get("general_advice", []),
+            "extraction_source": result.get("extraction_source", "unknown"),
+            "note": result.get("note", "")
+        })
+
+    except Exception:
+        logger.exception("Prescription extraction failed")
+        return jsonify({"error": "Prescription extraction failed."}), 500
 
 
 @app.route('/generate-prescription', methods=['POST'])
@@ -987,9 +1465,8 @@ def generate_prescription():
             visit_id=visit_id,
             _external=True,
         )
-
         try:
-            generate_prescription_pdf(data, local_download_url, filepath)
+            generate_prescription_pdf(data, filepath)
             if not os.path.exists(filepath):
                 raise FileNotFoundError(
                     f"Generated prescription PDF not found at: {filepath}"
@@ -1019,20 +1496,36 @@ def generate_prescription():
             logger.warning("Google Drive upload skipped for %s: %s", filepath, exc)
 
         # ── Send SMS ─────────────────────────────────────────────────────────
-        try:
-            if data.get("name") and data.get("phone_number") and drive_url:
+        sms_sent = False
+        sms_error = None
+        if not data.get("name") or not data.get("phone_number"):
+            sms_error = "No patient phone number is available; prescription was saved without SMS."
+        elif not drive_url:
+            sms_error = (
+                "Prescription was saved, but its Google Drive link is unavailable, "
+                "so the SMS was not sent."
+            )
+        else:
+            try:
                 send_sms(
                     patient_name=data["name"],
                     phone_number=data["phone_number"],
-                    download_url=drive_url
+                    download_url=drive_url,
                 )
-        except Exception as e:
-            logger.error(f"SMS send failed: {e}")
+                sms_sent = True
+            except Exception:
+                logger.exception("SMS send failed for visit %s", visit_id)
+                sms_error = (
+                    "Prescription was uploaded, but SMS could not be sent. "
+                    "Check the Twilio settings and patient phone number."
+                )
 
         return jsonify({
             "success":            True,
             "download_url":       local_download_url,
             "local_download_url": local_download_url,
+            "sms_sent":           sms_sent,
+            "sms_error":          sms_error,
             "drive_url":          drive_url,
             "filename":           filename,
             "patient":            data["name"],
@@ -3354,6 +3847,24 @@ def delete_medicine_api(medicine_id):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+
+@app.route('/medicine/<int:medicine_id>/expired', methods=['DELETE'])
+@role_required("medical_staff", api=True)
+def delete_expired_medicine_api(medicine_id):
+    try:
+        deleted = delete_expired_medicine(medicine_id)
+        if deleted is None:
+            return jsonify({"error": "Medicine not found."}), 404
+        if not deleted:
+            return jsonify({
+                "error": "This medicine is no longer expired and was not deleted."
+            }), 409
+        return jsonify({"message": "Expired medicine removed successfully."}), 200
+    except Exception:
+        logger.exception("Could not remove expired medicine %s", medicine_id)
+        return jsonify({"error": "Could not remove the expired medicine."}), 500
+
+
 # ==================== SALES API ====================
 
 @app.route('/sales', methods=['POST'])
@@ -3454,6 +3965,39 @@ def expired_medicines_api():
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.route('/medicines/expiry-alerts', methods=['GET'])
+@role_required("medical_staff", api=True)
+def expiry_alerts_api():
+    try:
+        days = int(request.args.get('days', app.config["EXPIRY_WARNING_DAYS"]))
+    except ValueError:
+        return jsonify({"error": "days must be a non-negative number."}), 400
+    if days < 0:
+        return jsonify({"error": "days cannot be negative"}), 400
+
+    try:
+        expired = get_expired_medicines()
+        expiring = get_expiring_medicines(days)
+        medicines = sorted(
+            expired + expiring,
+            key=lambda medicine: (
+                normalize_expiry(medicine["expiry_date"]),
+                medicine["id"],
+            ),
+        )
+        return jsonify({
+            "count": len(medicines),
+            "days": days,
+            "expired_count": len(expired),
+            "expiring_count": len(expiring),
+            "expired_medicines": expired,
+            "medicines": medicines,
+        }), 200
+    except Exception:
+        logger.exception("Could not load expiry alerts.")
+        return jsonify({"error": "Could not load expiry alerts."}), 500
 
 
 @app.route('/medicines/low-stock', methods=['GET'])

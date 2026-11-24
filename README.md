@@ -19,9 +19,14 @@ DOCTOR_PASSWORD=<doctor development password>
 STAFF_ID=<medical staff login ID>
 STAFF_PASSWORD=<medical staff development password>
 EXPIRY_WARNING_DAYS=7
+TWILIO_ACCOUNT_SID=<Twilio account SID>
+TWILIO_AUTH_TOKEN=<Twilio auth token>
+TWILIO_PHONE_NUMBER=<Twilio sender number>
 ```
 
 Use a unique random Flask secret, and use non-demo passwords outside local development. Set `SESSION_COOKIE_SECURE=true` when serving the application over HTTPS. Local HTTP development leaves this setting false. Start the application with `python app.py`.
+
+Prescription PDFs do not contain QR codes. When Google Drive and Twilio are configured and the patient has a phone number, the app uploads the PDF to Drive and sends the Drive viewing link by SMS. Drive OAuth uses `credentials.json` and `token.pickle` in the project folder. SMS is sent only after the Drive upload succeeds, and the Doctor dashboard reports upload or SMS failures. Drive files are shared with anyone who has the link, so treat SMS links as private.
 
 The Medical Staff expiry monitor warns about medicines expiring within `EXPIRY_WARNING_DAYS` days (default: 7). When the staff dashboard loads, it also checks the existing inventory for expired medicines and displays a dismissible alert with stock and location details. Dismissing the popup leaves expired entries available in Expiry Alerts. The staff-only expiring-medicines API also accepts a `days` query parameter to override the threshold for an individual request.
 

@@ -60,7 +60,7 @@
           <h1 id="dashboardTitle">Healthcare, made clearer.</h1>
           <p class="home-description">Choose a workspace or continue as a user.</p>
           <div class="role-buttons">
-            <button class="role-button" type="button" data-section-target="scanSection">User</button>
+            <button class="role-button" type="button" data-section-target="scanSection">Patient</button>
             <a class="role-button" href="{{ url_for('doctor_login') }}">Doctor</a>
             <a class="role-button" href="{{ url_for('staff_login') }}">Medical Staff</a>
           </div>
@@ -255,6 +255,7 @@
             <article class="content-card alert-card"><div class="card-heading"><h2>Expiring soon</h2><span class="alert-count" id="expiringCount">--</span></div><div id="expiringList" class="alert-list"><div class="empty-state">Expiring medicines will appear here.</div></div></article>
             <article class="content-card alert-card alert-card-danger"><div class="card-heading"><h2>Expired medicines</h2><span class="alert-count" id="expiredCount">--</span></div><div id="expiredList" class="alert-list"><div class="empty-state">Expired medicines will appear here.</div></div></article>
           </div>
+          <p id="expiryDeleteStatus" class="expiry-delete-status" role="status" aria-live="polite" hidden></p>
           <article class="content-card low-stock-monitor"><h2>Low-stock medicines</h2><div id="staffLowStockList" class="alert-list">Loading...</div></article>
         </section>
 
@@ -338,10 +339,28 @@
 
             <section class="prescription-entry-panel" aria-labelledby="prescriptionEntryTitle">
               <h3 id="prescriptionEntryTitle">Prescription entry</h3>
-              <p class="hint">Type the doctor's instructions or record them, then review the text before saving.</p>
+              <p class="hint">Voice-to-text prescription: type the doctor's instructions or record them, then review the text before saving.</p>
               <button id="recordSpeechBtn" type="button" class="record-btn">Record Prescription</button>
               <p id="speechStatus" class="hint" aria-live="polite"></p>
               <label for="prescriptionText">Prescription text (review before saving)</label>
+
+              <div class="prescription-ai-actions">
+              <button id="extractPrescriptionBtn" type="button" class="secondary-button">
+                Extract Medicines with AI
+              </button>
+              <p id="extractionStatus" class="hint" aria-live="polite"></p>
+            </div>
+
+            <div id="structuredPrescriptionPreview" class="content-card" hidden>
+              <h3>AI Extracted Prescription</h3>
+              <p class="hint">
+                Review the extracted information carefully. Edit the original prescription
+                text if corrections are needed. AI extraction is only a draft.
+              </p>
+              <div id="extractedMedicineList"></div>
+              <div id="extractedGeneralAdvice"></div>
+            </div>
+
               <textarea id="prescriptionText" placeholder="Type a medicine, dosage, and instructions, or use Record Prescription."></textarea>
             </section>
             <div class="generator-actions">
@@ -358,11 +377,12 @@
   {% if user_role == 'medical_staff' %}
   <dialog id="expiredMedicineModal" class="expired-medicine-modal" aria-labelledby="expiredMedicineTitle">
     <div class="expired-medicine-modal-header">
-      <h2 id="expiredMedicineTitle">EXPIRED MEDICINES ALERT</h2>
+      <h2 id="expiredMedicineTitle">EXPIRY ALERT</h2>
       <button id="closeExpiredMedicineModal" class="expired-medicine-modal-close" type="button">Close</button>
     </div>
     <div class="expired-medicine-modal-body">
       <p id="expiredMedicineWarning" class="expired-medicine-warning"></p>
+      <p id="expiredMedicineModalStatus" class="expiry-delete-status" role="status" aria-live="polite" hidden></p>
       <div id="expiredMedicineModalList" class="expired-medicine-list"></div>
     </div>
   </dialog>

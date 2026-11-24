@@ -133,6 +133,83 @@ if (prescriptionTextField) {
   });
 }
 
+const extractPrescriptionBtn = document.getElementById('extractPrescriptionBtn');
+const extractionStatus = document.getElementById('extractionStatus');
+const structuredPreview = document.getElementById('structuredPrescriptionPreview');
+const extractedMedicineList = document.getElementById('extractedMedicineList');
+const extractedGeneralAdvice = document.getElementById('extractedGeneralAdvice');
+
+if (extractPrescriptionBtn) {
+  extractPrescriptionBtn.addEventListener('click', async () => {
+    const text = prescriptionTextField?.value.trim();
+
+    if (!text) {
+      extractionStatus.textContent = 'Enter or record prescription text first.';
+      return;
+    }
+
+    extractPrescriptionBtn.disabled = true;
+    extractPrescriptionBtn.textContent = 'Extracting...';
+    extractionStatus.textContent = 'AI is analysing the prescription...';
+
+    try {
+      const response = await fetch('/extract-prescription', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text })
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Prescription extraction failed.');
+      }
+
+      extractedMedicineList.replaceChildren();
+      extractedGeneralAdvice.replaceChildren();
+
+      (data.medicines || []).forEach((medicine, index) => {
+        const card = document.createElement('article');
+        card.className = 'medicine-card';
+
+        const heading = document.createElement('h4');
+        heading.textContent = `${index + 1}. ${medicine.name || 'Medicine name not identified'}`;
+
+        const details = document.createElement('p');
+        details.textContent = [
+          `Dosage: ${medicine.dosage || 'Not specified'}`,
+          `Frequency: ${medicine.frequency || 'Not specified'}`,
+          `Duration: ${medicine.duration || 'Not specified'}`,
+          `Timing: ${medicine.timing || 'Not specified'}`,
+          `Food instruction: ${medicine.food_instruction || 'Not specified'}`,
+          `Special instructions: ${medicine.special_instructions || 'None'}`
+        ].join(' | ');
+
+        card.append(heading, details);
+        extractedMedicineList.appendChild(card);
+      });
+
+      (data.general_advice || []).forEach(advice => {
+        const item = document.createElement('p');
+        item.textContent = advice;
+        extractedGeneralAdvice.appendChild(item);
+      });
+
+      structuredPreview.hidden = false;
+
+      extractionStatus.textContent =
+        `Extraction completed using ${data.extraction_source || 'unknown source'}. Please review all details with the doctor before saving.`;
+
+    } catch (error) {
+      extractionStatus.textContent = error.message;
+      console.error('Prescription extraction error:', error);
+    } finally {
+      extractPrescriptionBtn.disabled = false;
+      extractPrescriptionBtn.textContent = 'Extract Medicines with AI';
+    }
+  });
+}
+
 async function generatePrescription() {
   generatorOutput.innerHTML = '';
   try {
@@ -155,6 +232,9 @@ async function generatePrescription() {
     const driveLink = data.drive_url
       ? `<a href="${escapeHtml(data.drive_url)}" target="_blank" rel="noopener" class="rx-download-link rx-drive-link">View on Google Drive</a>`
       : '';
+    const smsStatus = data.sms_sent
+      ? '<p class="rx-sms-status rx-sms-sent">Prescription link sent by SMS.</p>'
+      : `<p class="rx-sms-status error">${escapeHtml(data.sms_error || 'Prescription saved, but SMS was not sent.')}</p>`;
     generatorOutput.innerHTML = `
       <div class="medicine-card">
         <h3>Visit saved and prescription generated</h3>
@@ -166,6 +246,7 @@ async function generatePrescription() {
           <a href="${escapeHtml(data.download_url)}" target="_blank" rel="noopener" class="rx-download-link">Download prescription PDF</a>
           ${driveLink}
         </div>
+        ${smsStatus}
       </div>`;
     generateBtn.textContent = 'Visit saved';
     generateBtn.disabled = true;
@@ -906,6 +987,8 @@ const staffLowStockList = document.getElementById('staffLowStockList');
 const expiredMedicineModal = document.getElementById('expiredMedicineModal');
 const expiredMedicineModalList = document.getElementById('expiredMedicineModalList');
 const expiredMedicineWarning = document.getElementById('expiredMedicineWarning');
+const expiryDeleteStatus = document.getElementById('expiryDeleteStatus');
+const expiredMedicineModalStatus = document.getElementById('expiredMedicineModalStatus');
 const closeExpiredMedicineModal = document.getElementById('closeExpiredMedicineModal');
 const expiryVerificationNotice = document.getElementById('expiryVerificationNotice');
 let pendingOcrExpiry = null;
@@ -1193,13 +1276,13 @@ function renderAlertList(element, medicines, emptyText, withExpiryStatus = false
   }).join('') : `<div class="empty-state">${emptyText}</div>`;
 }
 
-function renderExpiredMedicineList(element, medicines) {
+function renderExpiredMedicineList(element, medicines, emptyText = 'No expired medicines.') {
   if (!element) return;
   element.textContent = '';
   if (!medicines.length) {
     const emptyState = document.createElement('div');
     emptyState.className = 'empty-state';
-    emptyState.textContent = 'No expired medicines.';
+    emptyState.textContent = emptyText;
     element.appendChild(emptyState);
     return;
   }
@@ -1210,11 +1293,22 @@ function renderExpiredMedicineList(element, medicines) {
 
     const medicineName = medicine.medicine_name || 'Unnamed medicine';
     const daysRemaining = Number(medicine.days_remaining);
-    const expiredDays = Number.isFinite(daysRemaining) ? Math.abs(daysRemaining) : null;
+    if (Number.isFinite(daysRemaining) && daysRemaining >= 0) {
+      item.classList.add('expired-medicine-item-upcoming');
+    }
     const title = document.createElement('strong');
-    title.textContent = expiredDays === null
-      ? `${medicineName} is expired.`
-      : `${medicineName} expired ${expiredDays} ${expiredDays === 1 ? 'day' : 'days'} ago.`;
+    if (!Number.isFinite(daysRemaining)) {
+      title.textContent = `${medicineName} has an expiry alert.`;
+    } else if (daysRemaining < 0) {
+      const expiredDays = Math.abs(daysRemaining);
+      title.textContent =
+        `${medicineName} expired ${expiredDays} ${expiredDays === 1 ? 'day' : 'days'} ago.`;
+    } else if (daysRemaining === 0) {
+      title.textContent = `${medicineName} expires today.`;
+    } else {
+      title.textContent =
+        `${medicineName} expires in ${daysRemaining} ${daysRemaining === 1 ? 'day' : 'days'}.`;
+    }
     item.appendChild(title);
 
     const details = [];
@@ -1234,6 +1328,23 @@ function renderExpiredMedicineList(element, medicines) {
     const detailText = document.createElement('p');
     detailText.textContent = details.join(' · ');
     item.appendChild(detailText);
+
+    const medicineId = Number(medicine.id);
+    if (daysRemaining < 0 && Number.isSafeInteger(medicineId) && medicineId > 0) {
+      const actions = document.createElement('div');
+      actions.className = 'expired-medicine-actions';
+
+      const removeButton = document.createElement('button');
+      removeButton.type = 'button';
+      removeButton.className = 'expired-medicine-remove';
+      removeButton.dataset.expiredMedicineId = String(medicineId);
+      removeButton.dataset.medicineName = medicineName;
+      removeButton.textContent = 'Remove';
+      removeButton.setAttribute('aria-label', `Remove ${medicineName} from inventory`);
+      actions.appendChild(removeButton);
+      item.appendChild(actions);
+    }
+
     element.appendChild(item);
   });
 }
@@ -1241,33 +1352,99 @@ function renderExpiredMedicineList(element, medicines) {
 async function refreshExpiredMedicineStatus(showPopup = false) {
   if (!expiredMedicineModal) return;
 
-  const response = await fetch('/medicines/expired');
+  const response = await fetch('/medicines/expiry-alerts');
   if (!response.ok) {
-    throw new Error(`Could not load expired medicines (HTTP ${response.status}).`);
+    throw new Error(`Could not load expiry alerts (HTTP ${response.status}).`);
   }
   const data = await response.json();
-  if (!Array.isArray(data.medicines)) {
-    throw new Error('Expired-medicine response did not contain a medicine list.');
+  if (!Array.isArray(data.medicines) || !Array.isArray(data.expired_medicines)) {
+    throw new Error('Expiry-alert response did not contain valid medicine lists.');
   }
 
   const medicines = data.medicines;
-  renderExpiredMedicineList(expiredList, medicines);
-  renderExpiredMedicineList(expiredMedicineModalList, medicines);
+  const expiredMedicines = data.expired_medicines;
+  renderExpiredMedicineList(expiredList, expiredMedicines);
+  renderExpiredMedicineList(
+    expiredMedicineModalList,
+    medicines,
+    'No medicines are expired or nearing expiry.'
+  );
   const expiredCount = document.getElementById('expiredCount');
-  if (expiredCount) expiredCount.textContent = medicines.length;
+  if (expiredCount) expiredCount.textContent = data.expired_count;
   if (!medicines.length) {
     expiredMedicineWarning.textContent = '';
     return;
   }
 
-  const count = medicines.length;
+  const expiringCount = medicines.length - expiredMedicines.length;
   expiredMedicineWarning.textContent =
-    `WARNING! ${count} medicine${count === 1 ? '' : 's'} in your inventory ${count === 1 ? 'has' : 'have'} expired.`;
+    `${expiredMedicines.length} expired; ${expiringCount} expiring within ${data.days} days. ` +
+    'Medicines are ordered by expiry date.';
   if (showPopup && !expiredMedicinePopupShown) {
     expiredMedicinePopupShown = true;
     expiredMedicineModal.showModal();
   }
 }
+
+function setExpiryDeleteStatus(message, state) {
+  [expiryDeleteStatus, expiredMedicineModalStatus].forEach(status => {
+    if (!status) return;
+    status.textContent = message;
+    status.hidden = !message;
+    status.dataset.state = state || '';
+  });
+}
+
+async function removeExpiredMedicine(button) {
+  const medicineId = Number(button.dataset.expiredMedicineId);
+  const medicineName = button.dataset.medicineName || 'this medicine';
+  if (!Number.isSafeInteger(medicineId) || medicineId < 1) {
+    setExpiryDeleteStatus('Could not remove this medicine: invalid record ID.', 'error');
+    return;
+  }
+  if (!window.confirm(`Permanently remove expired ${medicineName} from the medicine inventory?`)) {
+    return;
+  }
+
+  button.disabled = true;
+  setExpiryDeleteStatus(`Removing ${medicineName}...`, 'pending');
+  let responseData;
+  try {
+    const response = await fetch(`/medicine/${medicineId}/expired`, { method: 'DELETE' });
+    responseData = await response.json();
+    if (!response.ok) {
+      throw new Error(responseData.error || 'Could not remove the expired medicine.');
+    }
+  } catch (error) {
+    setExpiryDeleteStatus(error.message, 'error');
+    button.disabled = false;
+    return;
+  }
+
+  setExpiryDeleteStatus(responseData.message, 'success');
+  try {
+    await Promise.all([
+      loadInventory(),
+      loadSellMedicines(),
+      loadStaffAlerts(),
+      refreshExpiredMedicineStatus(false)
+    ]);
+  } catch (error) {
+    console.error('Medicine was removed but the displays could not be refreshed:', error);
+    setExpiryDeleteStatus(
+      `${responseData.message} Refresh the inventory if the displays do not update.`,
+      'error'
+    );
+  }
+}
+
+[expiredList, expiredMedicineModalList].forEach(list => {
+  if (!list) return;
+  list.addEventListener('click', event => {
+    const button = event.target.closest('button[data-expired-medicine-id]');
+    if (button) removeExpiredMedicine(button);
+  });
+});
 
 async function loadStaffAlerts() {
   const [expiring, expired, lowStock] = await Promise.all([
