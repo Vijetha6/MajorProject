@@ -225,19 +225,6 @@ li {
   margin-top: 14px;
 }
 
-.voice-action-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  align-items: center;
-  margin: 10px 0 8px;
-}
-
-.small-button {
-  padding: 10px 16px;
-  font-size: 14px;
-}
-
 .record-btn {
   background: #7c3aed;
   color: white;
@@ -259,51 +246,6 @@ li {
 .record-btn:disabled {
   background: #9ca3af;
   cursor: not-allowed;
-}
-
-.structured-prescription-preview {
-  margin-top: 16px;
-  border: 1px solid #d9e5f3;
-  border-radius: 10px;
-  background: #f8fbff;
-  padding: 14px;
-}
-
-.preview-title {
-  margin: 0 0 10px;
-  font-size: 14px;
-  font-weight: 700;
-  color: #1f3b5f;
-}
-
-.preview-empty {
-  color: #5d6b82;
-  font-size: 14px;
-}
-
-.preview-medicine {
-  border: 1px solid #dfe9f6;
-  border-radius: 8px;
-  background: white;
-  padding: 10px 12px;
-  margin-bottom: 8px;
-}
-
-.preview-medicine:last-child {
-  margin-bottom: 0;
-}
-
-.preview-medicine strong {
-  color: #0f172a;
-}
-
-.preview-medicine .row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  margin-top: 6px;
-  color: #334155;
-  font-size: 14px;
 }
 
 /* Loading */
@@ -980,6 +922,51 @@ td { color: var(--muted); }
 .alert-count { color: var(--red); font-family: Georgia, "Times New Roman", serif; font-size: 28px; }
 .alert-card-danger { border-top: 3px solid var(--red); }
 .alert-list { color: var(--muted); font-size: 11px; line-height: 1.7; }
+.expired-medicine-modal {
+  width: min(680px, calc(100vw - 32px));
+  max-width: none;
+  max-height: min(82vh, 760px);
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  border-radius: 10px;
+  color: #1e293b;
+  box-shadow: 0 24px 80px rgba(15, 23, 42, 0.35);
+}
+.expired-medicine-modal::backdrop { background: rgba(15, 23, 42, 0.68); }
+.expired-medicine-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 20px;
+  background: #991b1b;
+  color: #fff;
+}
+.expired-medicine-modal-header h2 { margin: 0; font-size: 16px; letter-spacing: 0.04em; }
+.expired-medicine-modal-close {
+  flex: 0 0 auto;
+  padding: 7px 12px;
+  border: 1px solid #fff;
+  border-radius: 5px;
+  background: #fff;
+  color: #991b1b;
+  font-weight: 700;
+  cursor: pointer;
+}
+.expired-medicine-modal-body { max-height: calc(82vh - 64px); padding: 18px 20px 20px; overflow-y: auto; }
+.expired-medicine-warning {
+  margin: 0 0 14px;
+  padding: 12px;
+  border-left: 4px solid #b91c1c;
+  background: #fef2f2;
+  color: #991b1b;
+  font-weight: 700;
+}
+.expired-medicine-list { display: grid; gap: 10px; }
+.expired-medicine-item { padding: 12px; border: 1px solid #fecaca; border-radius: 6px; background: #fff; }
+.expired-medicine-item strong { color: #7f1d1d; }
+.expired-medicine-item p { margin: 5px 0 0; color: #475569; font-size: 12px; line-height: 1.6; }
 .expiry-status {
   display: inline-block;
   margin: 0 6px;
@@ -991,6 +978,7 @@ td { color: var(--muted); }
   vertical-align: middle;
 }
 .expiry-status-expired { color: #a61b1b; background: #fee4e2; }
+.expiry-status-expires-today { color: #8a4b08; background: #fff0d6; }
 .expiry-status-expiring { color: #9a4d00; background: #fff0d6; }
 .expiry-status-valid { color: #176b3a; background: #e2f5e9; }
 .expiry-verification-notice {
@@ -1078,7 +1066,6 @@ body {
 .legacy-tab-control,
 .prescription-section,
 #inventorySection,
-#addMedicineSection,
 #alertsSection,
 #lowStockSection {
   display: none;
@@ -1413,6 +1400,7 @@ main > #tabGenerator,
 #dashboardSection.active-section,
 #scanSection.active-section,
 #inventorySection.active-section,
+#inventorySalesSection.active-section,
 #addMedicineSection.active-section,
 #alertsSection.active-section,
 #lowStockSection.active-section,
@@ -1571,6 +1559,7 @@ main > #tabGenerator,
 #scanSection.active-section,
 #generatorTab.active-section,
 #inventorySection.active-section,
+#inventorySalesSection.active-section,
 #addMedicineSection.active-section,
 #alertsSection.active-section,
 #lowStockSection.active-section {
@@ -1929,360 +1918,46 @@ html[data-user-role="public"] .role-button {
     padding-left: 16px;
   }
 }
-/* ---------------------------------------------------------------
-   INTELLIGENT PRESCRIPTION EXTRACTION UI
-   --------------------------------------------------------------- */
 
-.structured-prescription-preview {
-  margin: 18px 0;
-  padding: 14px;
-  border: 1px solid #e0e7ff;
-  border-radius: 6px;
-  background: #f8faff;
-}
-
-.preview-title {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  margin: 0 0 12px;
-  color: var(--ink);
-  font-size: 13px;
-  font-weight: 700;
-}
-
-.extraction-indicator {
-  display: inline-block;
-  padding: 4px 8px;
-  border-radius: 4px;
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
-}
-
-.extraction-ai {
-  background: #d1fae5;
-  color: #065f46;
-}
-
-.extraction-fallback {
-  background: #fef3c7;
-  color: #92400e;
-}
-
-.extraction-client {
-  background: #e0e7ff;
-  color: #3730a3;
-}
-
-.preview-empty {
-  padding: 24px 14px;
-  text-align: center;
-  color: #64748b;
-  font-size: 12px;
-  line-height: 1.6;
-}
-
-.preview-note {
-  margin: 0 0 14px;
-  padding: 10px;
-  border-left: 3px solid #f59e0b;
-  background: #fef3c7;
-  color: #92400e;
-  font-size: 11px;
-  line-height: 1.5;
-}
-
-.preview-medicine {
-  margin: 0 0 16px;
-  padding: 14px;
-  border: 1px solid #cbd5e1;
-  border-radius: 6px;
-  background: #fff;
-}
-
-.preview-medicine-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin: 0 0 12px;
-}
-
-.preview-medicine-header h4 {
-  margin: 0;
-  color: var(--ink);
-  font-size: 13px;
-  font-weight: 700;
-}
-
-.remove-medicine-btn {
-  width: 26px;
-  height: 26px;
-  border: 1px solid #cbd5e1;
-  border-radius: 4px;
-  background: #fff;
-  color: #ef4444;
-  font-size: 18px;
-  font-weight: 700;
-  line-height: 1;
-  cursor: pointer;
-  transition: all 0.15s ease;
-}
-
-.remove-medicine-btn:hover {
-  border-color: #ef4444;
-  background: #fef2f2;
-}
-
-.preview-grid {
+/* ==================== Medicine Inventory & Sales ==================== */
+/* The combined inventory and sales page contains both functional panels. */
+#inventorySalesSection.active-section { display: block !important; }
+.inventory-sales-panel { display: block; margin: 18px 0 26px; }
+.inventory-sales-panel + .inventory-sales-panel { padding-top: 22px; border-top: 1px solid #e2e8f0; }
+#salesHistorySection.active-section { display: block !important; }
+/* The staff tab bar is narrow; with five tabs let them wrap instead of hiding behind the Log out button. */
+.staff-tabs { flex-wrap: wrap; overflow-x: visible; }
+.sell-form-grid { grid-template-columns: 1fr; margin-bottom: 16px; }
+.sell-form-grid select { width: 100%; padding: 11px; }
+.sell-stock-details {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-  margin-bottom: 10px;
-}
-
-.preview-grid label {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-  color: var(--muted);
-  font-size: 10px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-}
-
-.preview-grid input,
-.preview-grid select {
-  padding: 8px;
-  border: 1px solid #cbd5e1;
-  border-radius: 4px;
-  background: #fff;
-  color: var(--ink);
-  font-size: 12px;
-}
-
-.preview-grid input:focus,
-.preview-grid select:focus {
-  border-color: #3b82f6;
-  outline: none;
-  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.1);
-}
-
-.preview-grid .field-warning input {
-  border-color: #f59e0b;
-  background: #fffbeb;
-}
-
-.preview-timing {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px 14px;
-  margin: 0 0 10px;
-  padding: 10px;
-  border: 1px solid #e5e7eb;
-  border-radius: 4px;
-  background: #f9fafb;
-}
-
-.timing-label {
-  color: var(--muted);
-  font-size: 10px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-}
-
-.preview-timing label {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  color: var(--ink);
-  font-size: 11px;
-  cursor: pointer;
-}
-
-.preview-timing input[type="checkbox"] {
-  width: 15px;
-  height: 15px;
-  cursor: pointer;
-}
-
-.preview-general-advice {
-  margin: 16px 0 0;
-  padding: 12px;
-  border: 1px solid #bfdbfe;
+  gap: 12px;
+  margin: 0 0 14px;
+  padding: 14px;
+  border: 1px solid #bae6fd;
   border-radius: 6px;
-  background: #eff6ff;
-}
-
-.preview-general-advice h4 {
-  margin: 0 0 10px;
-  color: #1e40af;
+  background: #f0f9ff;
+  color: #164e63;
   font-size: 12px;
-  font-weight: 700;
+  text-align: left;
 }
-
-.preview-general-advice ul {
-  margin: 0;
-  padding-left: 20px;
-}
-
-.preview-general-advice li {
-  margin: 4px 0;
-  color: #1e40af;
-  font-size: 11px;
-  line-height: 1.5;
-}
-
-.advice-note {
-  margin: 10px 0 0;
-  color: #64748b;
+.sell-stock-details[hidden] { display: none; }
+.sell-stock-details span {
+  display: block;
+  margin-bottom: 4px;
+  color: #0f766e;
   font-size: 10px;
-  font-style: italic;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
-
-.voice-action-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.voice-action-row .small-button {
-  padding: 7px 10px;
-  font-size: 11px;
-}
-
-@media (max-width: 680px) {
-  .preview-grid {
-    grid-template-columns: 1fr;
-  }
-  
-  .voice-action-row {
-    flex-direction: column;
-    align-items: stretch;
-  }
-  
-  .voice-action-row button {
-    width: 100%;
-  }
-}
-
-/* ═══════════════════════════════════════════════════════════════
-   WhatsApp Click-to-Chat Button Styles
-   ═══════════════════════════════════════════════════════════════ */
-
-.rx-whatsapp-btn {
-  display: inline-block;
-  background: #25D366;
-  color: white;
-  padding: 12px 24px;
-  border: none;
-  border-radius: 8px;
-  font-size: 15px;
-  font-weight: 600;
-  cursor: pointer;
-  text-decoration: none;
-  transition: background 0.3s, transform 0.2s, opacity 0.3s;
-  box-shadow: 0 2px 8px rgba(37, 211, 102, 0.25);
-  margin-top: 10px;
-}
-
-.rx-whatsapp-btn:hover {
-  background: #20BA5A;
-  transform: translateY(-1px);
-  box-shadow: 0 4px 12px rgba(37, 211, 102, 0.35);
-}
-
-.rx-whatsapp-btn:active {
-  transform: translateY(0);
-  box-shadow: 0 2px 6px rgba(37, 211, 102, 0.25);
-}
-
-.rx-whatsapp-btn:disabled {
-  background: #9CA3AF;
-  cursor: not-allowed;
-  opacity: 0.6;
-  box-shadow: none;
-}
-
-.rx-whatsapp-instruction {
-  color: #6B7280;
-  font-size: 13px;
-  font-style: italic;
-  margin-top: 12px;
-  line-height: 1.5;
-  text-align: left;
-  padding: 10px;
-  background: #FEF3C7;
-  border-left: 3px solid #F59E0B;
-  border-radius: 4px;
-}
-
-.rx-download-buttons {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  margin-top: 16px;
-}
-
-/* WhatsApp Automatic Status Message */
-.rx-whatsapp-status {
-  margin-top: 16px;
-  padding: 16px;
-  background: linear-gradient(135deg, #E8F5E9 0%, #F1F8E9 100%);
-  border: 2px solid #25D366;
-  border-radius: 12px;
-  text-align: left;
-  box-shadow: 0 2px 8px rgba(37, 211, 102, 0.15);
-  animation: slideInWhatsApp 0.5s ease-out;
-}
-
-.rx-whatsapp-status strong {
-  display: flex;
-  align-items: center;
-  font-size: 15px;
-  color: #128C7E;
-}
-
-.rx-whatsapp-status p {
-  margin: 8px 0 0 28px;
-  font-size: 13px;
-  color: #555;
-  line-height: 1.5;
-}
-
-@keyframes slideInWhatsApp {
-  from {
-    opacity: 0;
-    transform: translateY(-10px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-@media (max-width: 620px) {
-  .rx-whatsapp-btn {
-    width: 100%;
-    text-align: center;
-  }
-  
-  .rx-download-buttons {
-    gap: 8px;
-  }
-  
-  .rx-whatsapp-status {
-    padding: 12px;
-  }
-  
-  .rx-whatsapp-status p {
-    margin-left: 0;
-    font-size: 12px;
-  }
-}
+.sell-stock-details strong { overflow-wrap: anywhere; }
+#sellDetailQuantity { font-size: 18px; color: var(--blue); }
+.sell-status.is-success { color: #176b3a; font-size: 12px; font-weight: 700; }
+.sell-status.is-error { color: var(--red); font-size: 12px; font-weight: 700; }
+#sellSubmitBtn:disabled { opacity: 0.6; cursor: not-allowed; }
+/* Compact so all four columns (including Time) fit the narrow card without sideways scrolling. */
+#salesHistoryTable th,
+#salesHistoryTable td { padding: 10px 6px; white-space: normal; }
+#salesHistoryTable td small { display: block; color: #64748b; }

@@ -24,14 +24,24 @@ from database import (
     delete_medicine,
     get_expiring_medicines,
     get_expired_medicines,
-    get_low_stock_medicines
+    get_low_stock_medicines,
+    sell_medicine,
+    get_sales_history,
+    SaleError
 )
 import cv2
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import pytesseract
-import easyocr
+# Initialize EasyOCR
+try:
+    import easyocr
+    reader = easyocr.Reader(['en'], gpu=False)
+    print("EasyOCR initialized successfully")
+except Exception as e:
+    print(f"EasyOCR initialization failed: {e}")
+    reader = None
 try:
     from google import genai
 except Exception:
@@ -123,6 +133,7 @@ app.config.update(
     SESSION_COOKIE_SAMESITE="Lax",
     SESSION_COOKIE_SECURE=os.getenv("SESSION_COOKIE_SECURE", "false").lower() == "true",
     PERMANENT_SESSION_LIFETIME=timedelta(hours=8),
+    EXPIRY_WARNING_DAYS=int(os.getenv("EXPIRY_WARNING_DAYS", "7")),
     AUTH_USERS={
         "doctor": {
             "user_id": os.getenv("DOCTOR_ID", ""),
@@ -3748,13 +3759,71 @@ def delete_medicine_api(medicine_id):
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+# ==================== SALES API ====================
+
+@app.route('/sales', methods=['POST'])
+@role_required("medical_staff", api=True)
+def create_sale_api():
+    data = request.get_json(silent=True)
+
+    if not isinstance(data, dict):
+        return jsonify({"error": "A JSON body is required."}), 400
+    if "medicine_id" not in data:
+        return jsonify({"error": "medicine_id is required."}), 400
+    if "quantity" not in data:
+        return jsonify({"error": "quantity is required."}), 400
+
+    medicine_id = data["medicine_id"]
+    if isinstance(medicine_id, str) and medicine_id.strip().isdigit():
+        medicine_id = int(medicine_id)
+
+    request_id = data.get("request_id")
+    if request_id is not None and (
+        not isinstance(request_id, str) or not 0 < len(request_id) <= 100
+    ):
+        return jsonify({"error": "request_id must be a short text value."}), 400
+
+    try:
+        sale = sell_medicine(
+            medicine_id,
+            data["quantity"],
+            sold_by=session.get("user_id"),
+            request_id=request_id,
+        )
+    except SaleError as error:
+        return jsonify({"error": error.message}), error.status
+    except Exception:
+        logger.exception("Sale failed unexpectedly")
+        return jsonify({"error": "The sale could not be completed. No stock was changed."}), 500
+
+    if sale["duplicate"]:
+        message = (
+            "This sale was already recorded, so stock was not reduced again. "
+            f"Remaining stock: {sale['remaining_stock']}."
+        )
+    else:
+        message = f"Sale completed successfully. Remaining stock: {sale['remaining_stock']}."
+    return jsonify({"message": message, **sale}), 200 if sale["duplicate"] else 201
+
+
+@app.route('/sales', methods=['GET'])
+@role_required("medical_staff", api=True)
+def get_sales_api():
+    try:
+        sales = get_sales_history()
+        return jsonify({"count": len(sales), "sales": sales}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
         # ==================== INVENTORY ALERT API ====================
 
 @app.route('/medicines/expiring', methods=['GET'])
 @role_required("medical_staff", api=True)
 def expiring_medicines_api():
     try:
-        days = int(request.args.get('days', 30))
+        days = int(request.args.get('days', app.config["EXPIRY_WARNING_DAYS"]))
 
         if days < 0:
             return jsonify({

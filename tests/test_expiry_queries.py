@@ -64,3 +64,40 @@ def test_expiry_filters_for_today_and_future(tmp_path, monkeypatch):
         "Expires in 30 days",
         "Expired yesterday",
     ]
+
+
+def test_seven_day_expiry_window_reports_remaining_days(tmp_path, monkeypatch):
+    db_path = tmp_path / "medicine_inventory.db"
+    monkeypatch.setattr(database, "DATABASE", db_path)
+    monkeypatch.setattr(database, "_india_today", lambda: date(2027, 8, 1))
+    database.init_database()
+
+    expiry_dates = {
+        "Expired yesterday": "2027-07-31",
+        "Expires today": "2027-08-01",
+        "Expires tomorrow": "2027-08-02",
+        "Expires in 2 days": "2027-08-03",
+        "Expires in 7 days": "2027-08-08",
+        "Expires in 8 days": "2027-08-09",
+    }
+    for medicine_name, expiry_date in expiry_dates.items():
+        database.add_medicine({
+            "medicine_name": medicine_name,
+            "expiry_date": expiry_date,
+        })
+
+    upcoming = database.get_expiring_medicines(7)
+    remaining_days = {
+        medicine["medicine_name"]: medicine["days_remaining"]
+        for medicine in upcoming
+    }
+
+    assert remaining_days == {
+        "Expires today": 0,
+        "Expires tomorrow": 1,
+        "Expires in 2 days": 2,
+        "Expires in 7 days": 7,
+    }
+    expired = database.get_expired_medicines()
+    assert [medicine["medicine_name"] for medicine in expired] == ["Expired yesterday"]
+    assert expired[0]["days_remaining"] == -1

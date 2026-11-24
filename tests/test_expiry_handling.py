@@ -63,6 +63,147 @@ def staff_client():
     return client
 
 
+def test_expiry_warning_api_uses_seven_day_default_and_allows_override(inventory_db):
+    for medicine_name, expiry_date in (
+        ("Expired yesterday", "2027-07-31"),
+        ("Expires today", "2027-08-01"),
+        ("Expires tomorrow", "2027-08-02"),
+        ("Expires in 2 days", "2027-08-03"),
+        ("Expires in 7 days", "2027-08-08"),
+        ("Expires in 8 days", "2027-08-09"),
+    ):
+        database.add_medicine({
+            "medicine_name": medicine_name,
+            "expiry_date": expiry_date,
+        })
+
+    client = staff_client()
+    response = client.get("/medicines/expiring")
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["days"] == 7
+    assert {
+        medicine["medicine_name"]: medicine["days_remaining"]
+        for medicine in payload["medicines"]
+    } == {
+        "Expires today": 0,
+        "Expires tomorrow": 1,
+        "Expires in 2 days": 2,
+        "Expires in 7 days": 7,
+    }
+
+    overridden = client.get("/medicines/expiring?days=2")
+    assert overridden.status_code == 200
+    assert overridden.get_json()["days"] == 2
+    assert [
+        medicine["medicine_name"]
+        for medicine in overridden.get_json()["medicines"]
+    ] == ["Expires today", "Expires tomorrow", "Expires in 2 days"]
+
+    expired = client.get("/medicines/expired")
+    expired_medicines = expired.get_json()["medicines"]
+    assert [medicine["medicine_name"] for medicine in expired_medicines] == [
+        "Expired yesterday"
+    ]
+    assert expired_medicines[0]["days_remaining"] == -1
+
+
+def test_expired_medicines_include_details_and_skip_today_future_or_invalid_dates(inventory_db):
+    with sqlite3.connect(inventory_db) as connection:
+        connection.executemany(
+            """
+            INSERT INTO medicines (
+                medicine_name, brand_name, generic_name, strength, dosage_form,
+                expiry_date, quantity, row_number, column_number
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                ("Expired ISO", "Brand A", None, None, None, "2027-07-30", 5, 2, 4),
+                ("Expired alternate", "Brand B", None, None, None, "31/07/2027", 3, 1, 8),
+                ("Expires today", None, None, None, None, "2027-08-01", 2, None, None),
+                ("Expires tomorrow", None, None, None, None, "2027-08-02", 1, None, None),
+                ("Invalid expiry", None, None, None, None, "not-a-date", 7, None, None),
+                ("Missing expiry", None, None, None, None, "", 4, None, None),
+            ],
+        )
+
+    response = staff_client().get("/medicines/expired")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["count"] == 2
+    assert [medicine["medicine_name"] for medicine in payload["medicines"]] == [
+        "Expired ISO",
+        "Expired alternate",
+    ]
+    assert payload["medicines"][0]["brand_name"] == "Brand A"
+    assert payload["medicines"][0]["expiry_date"] == "2027-07-30"
+    assert payload["medicines"][0]["quantity"] == 5
+    assert payload["medicines"][0]["row_number"] == 2
+    assert payload["medicines"][0]["column_number"] == 4
+    assert [medicine["days_remaining"] for medicine in payload["medicines"]] == [-2, -1]
+
+
+def test_expired_medicines_empty_when_inventory_has_no_valid_past_expiry(inventory_db):
+    with sqlite3.connect(inventory_db) as connection:
+        connection.executemany(
+            """
+            INSERT INTO medicines (
+                medicine_name, expiry_date, quantity
+            ) VALUES (?, ?, ?)
+            """,
+            [
+                ("Expires today", "2027-08-01", 1),
+                ("Expires future", "2027-08-02", 1),
+                ("Invalid expiry", "not-a-date", 1),
+                ("Missing expiry", "", 1),
+            ],
+        )
+
+    response = staff_client().get("/medicines/expired")
+
+    assert response.status_code == 200
+    assert response.get_json() == {"count": 0, "medicines": []}
+
+
+def test_expired_medicine_results_reflect_inventory_updates_and_removals(inventory_db):
+    medicine_id = database.add_medicine({
+        "medicine_name": "Expired medicine",
+        "expiry_date": "2027-07-31",
+        "quantity": 3,
+    })
+    assert [item["id"] for item in database.get_expired_medicines()] == [medicine_id]
+
+    assert database.update_medicine(
+        medicine_id,
+        {"medicine_name": "Updated medicine", "expiry_date": "2027-08-02", "quantity": 3},
+    )
+    assert database.get_expired_medicines() == []
+
+    removed_id = database.add_medicine({
+        "medicine_name": "Removed expired medicine",
+        "expiry_date": "2027-07-30",
+    })
+    assert database.delete_medicine(removed_id)
+    assert database.get_expired_medicines() == []
+
+
+def test_expired_medicine_modal_is_only_rendered_for_medical_staff(inventory_db):
+    staff_dashboard = staff_client().get("/staff/dashboard")
+    assert b'id="expiredMedicineModal"' in staff_dashboard.data
+    assert b"EXPIRED MEDICINES ALERT" in staff_dashboard.data
+    assert b'id="closeExpiredMedicineModal"' in staff_dashboard.data
+
+    public_dashboard = medicine_app.app.test_client().get("/")
+    assert b'id="expiredMedicineModal"' not in public_dashboard.data
+
+    doctor_client = medicine_app.app.test_client()
+    with doctor_client.session_transaction() as session:
+        session["role"] = "doctor"
+    doctor_dashboard = doctor_client.get("/doctor/dashboard")
+    assert b'id="expiredMedicineModal"' not in doctor_dashboard.data
+
+
 def test_add_and_update_medicine_normalize_without_partial_overwrite(inventory_db):
     medicine_id = database.add_medicine(
         {"medicine_name": "Test Medicine", "expiry_date": "03/2027", "quantity": 4}
