@@ -1,0 +1,471 @@
+================================================================================
+WHATSAPP PRESCRIPTION SHARING - VISUAL WORKFLOW
+================================================================================
+
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         DOCTOR DASHBOARD                                │
+└─────────────────────────────────────────────────────────────────────────┘
+
+STEP 1: CREATE PRESCRIPTION (Existing Functionality)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    ┌──────────────┐
+    │ Search       │
+    │ Patient      │
+    └──────┬───────┘
+           │
+           ▼
+    ┌──────────────┐
+    │ Select       │
+    │ Patient      │
+    └──────┬───────┘
+           │
+           ▼
+    ┌──────────────┐
+    │ Record/Type  │
+    │ Prescription │
+    └──────┬───────┘
+           │
+           ▼
+    ┌──────────────┐
+    │ Review       │
+    │ Medicines    │
+    └──────┬───────┘
+           │
+           ▼
+    ┌──────────────────────────┐
+    │ Click "Save Visit and    │
+    │ Generate PDF"            │
+    └──────────┬───────────────┘
+               │
+               ▼
+
+STEP 2: BACKEND PROCESSING (Existing Functionality)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    ┌────────────────────────┐
+    │ Backend receives       │
+    │ prescription data      │
+    └──────────┬─────────────┘
+               │
+               ▼
+    ┌────────────────────────┐
+    │ Save visit to database │
+    └──────────┬─────────────┘
+               │
+               ▼
+    ┌────────────────────────┐
+    │ Generate PDF with QR   │
+    └──────────┬─────────────┘
+               │
+               ▼
+    ┌────────────────────────┐
+    │ Upload to Google Drive │
+    │ (if configured)        │
+    └──────────┬─────────────┘
+               │
+               ▼
+    ┌────────────────────────┐
+    │ Send SMS (if config'd) │
+    └──────────┬─────────────┘
+               │
+               ▼
+    ┌────────────────────────┐
+    │ Return JSON response   │
+    │ with patient data      │
+    └──────────┬─────────────┘
+               │
+               ▼
+
+STEP 3: SUCCESS DISPLAY (NEW - WhatsApp Integration)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    ┌─────────────────────────────────────────────────┐
+    │  ✓ Visit saved and prescription generated       │
+    │                                                  │
+    │  Patient: John Doe · PT-ABC123                  │
+    │  Visit ID: VIS-XYZ789                           │
+    │  Doctor ID: doctor_xyz                          │
+    │  Medicines: 3                                   │
+    │                                                  │
+    │  ┌────────────────────────────────────────┐    │
+    │  │  📄 Download Prescription PDF          │    │
+    │  └────────────────────────────────────────┘    │
+    │                                                  │
+    │  ┌────────────────────────────────────────┐    │
+    │  │  ☁️  View on Google Drive              │    │
+    │  └────────────────────────────────────────┘    │
+    │                                                  │
+    │  ┌────────────────────────────────────────┐    │
+    │  │  📱 Send Prescription via WhatsApp     │◄───┐
+    │  └────────────────────────────────────────┘    │
+    │                                                  │ NEW!
+    │  Note: WhatsApp will open with a pre-filled    │
+    │  message. Download the PDF above and attach     │
+    │  it manually before sending.                    │
+    └─────────────────────────────────────────────────┘
+
+STEP 4: DOCTOR CLICKS WHATSAPP BUTTON (NEW)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    ┌──────────────────────────────────────────┐
+    │ Doctor clicks                            │
+    │ "Send Prescription via WhatsApp"         │
+    └──────────────┬───────────────────────────┘
+                   │
+                   ▼
+    ┌──────────────────────────────────────────┐
+    │ JavaScript extracts patient data:        │
+    │ - Patient Name: "John Doe"               │
+    │ - Phone Number: "+919876543210"          │
+    │ - Visit ID: "VIS-XYZ789"                 │
+    └──────────────┬───────────────────────────┘
+                   │
+                   ▼
+    ┌──────────────────────────────────────────┐
+    │ Validate phone number                    │
+    │ normalizePhoneForWhatsApp()              │
+    └──────────────┬───────────────────────────┘
+                   │
+                   ├─────────────┐
+                   │             │
+         VALID     │             │   INVALID
+                   │             │
+                   ▼             ▼
+        ┌─────────────────┐   ┌─────────────────────────┐
+        │ Continue        │   │ Show error:             │
+        │                 │   │ "Invalid phone number"  │
+        └────────┬────────┘   │ "Update patient mobile" │
+                 │             └─────────────────────────┘
+                 │
+                 ▼
+
+STEP 5: CONSENT CONFIRMATION (NEW)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    ┌──────────────────────────────────────────────────┐
+    │  ⚠️  Consent Confirmation                        │
+    │                                                   │
+    │  Before sending the prescription via WhatsApp:   │
+    │                                                   │
+    │  Has John Doe agreed to receive their            │
+    │  prescription through WhatsApp?                  │
+    │                                                   │
+    │  Note: You will need to manually download        │
+    │  and attach the PDF in WhatsApp.                 │
+    │                                                   │
+    │     [ Cancel ]           [ OK ]                  │
+    └──────────────────────────────────────────────────┘
+                      │              │
+                      │              │
+            Cancel    │              │    OK/Confirm
+                      │              │
+                      ▼              ▼
+         ┌────────────────┐   ┌──────────────┐
+         │ Stop           │   │ Continue     │
+         │ (Do nothing)   │   │              │
+         └────────────────┘   └──────┬───────┘
+                                     │
+                                     ▼
+
+STEP 6: GENERATE WHATSAPP URL (NEW)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    ┌──────────────────────────────────────────┐
+    │ Normalize phone number:                  │
+    │ +919876543210 → 919876543210             │
+    └──────────────┬───────────────────────────┘
+                   │
+                   ▼
+    ┌──────────────────────────────────────────┐
+    │ Prepare message:                         │
+    │ "Hello,                                  │
+    │  Your prescription from Shri XYZ Clinic  │
+    │  is ready..."                            │
+    └──────────────┬───────────────────────────┘
+                   │
+                   ▼
+    ┌──────────────────────────────────────────┐
+    │ Encode message with encodeURIComponent() │
+    └──────────────┬───────────────────────────┘
+                   │
+                   ▼
+    ┌──────────────────────────────────────────┐
+    │ Generate WhatsApp URL:                   │
+    │ https://wa.me/919876543210?text=...      │
+    └──────────────┬───────────────────────────┘
+                   │
+                   ▼
+
+STEP 7: OPEN WHATSAPP (NEW)
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    ┌──────────────────────────────────────────┐
+    │ window.open(whatsappURL, '_blank')       │
+    └──────────────┬───────────────────────────┘
+                   │
+                   ▼
+    ┌──────────────────────────────────────────┐
+    │ WhatsApp opens in new window/tab         │
+    │                                          │
+    │  ┌────────────────────────────────────┐ │
+    │  │ WhatsApp                           │ │
+    │  ├────────────────────────────────────┤ │
+    │  │ To: +91 9876543210 (John Doe)      │ │
+    │  │                                    │ │
+    │  │ Message:                           │ │
+    │  │ Hello,                             │ │
+    │  │                                    │ │
+    │  │ Your prescription document from    │ │
+    │  │ Shri XYZ Clinic is ready.          │ │
+    │  │                                    │ │
+    │  │ Please find your prescription PDF  │ │
+    │  │ attached to this message.          │ │
+    │  │                                    │ │
+    │  │ [Type a message]                   │ │
+    │  │                                    │ │
+    │  │  📎 Attach    ✓ Send              │ │
+    │  └────────────────────────────────────┘ │
+    └──────────────────────────────────────────┘
+
+STEP 8: DOCTOR ATTACHES PDF MANUALLY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    ┌──────────────────────────────────────────┐
+    │ 1. Doctor goes back to dashboard tab     │
+    └──────────────┬───────────────────────────┘
+                   │
+                   ▼
+    ┌──────────────────────────────────────────┐
+    │ 2. Click "Download Prescription PDF"     │
+    └──────────────┬───────────────────────────┘
+                   │
+                   ▼
+    ┌──────────────────────────────────────────┐
+    │ 3. PDF saved to Downloads folder         │
+    └──────────────┬───────────────────────────┘
+                   │
+                   ▼
+    ┌──────────────────────────────────────────┐
+    │ 4. Go back to WhatsApp tab               │
+    └──────────────┬───────────────────────────┘
+                   │
+                   ▼
+    ┌──────────────────────────────────────────┐
+    │ 5. Click attachment icon (📎)            │
+    └──────────────┬───────────────────────────┘
+                   │
+                   ▼
+    ┌──────────────────────────────────────────┐
+    │ 6. Select downloaded prescription PDF    │
+    └──────────────┬───────────────────────────┘
+                   │
+                   ▼
+    ┌──────────────────────────────────────────┐
+    │ 7. Review message and PDF                │
+    └──────────────┬───────────────────────────┘
+                   │
+                   ▼
+    ┌──────────────────────────────────────────┐
+    │ 8. Click Send (✓)                        │
+    └──────────────┬───────────────────────────┘
+                   │
+                   ▼
+
+STEP 9: PATIENT RECEIVES PRESCRIPTION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    ┌──────────────────────────────────────────┐
+    │ Patient's WhatsApp                       │
+    │                                          │
+    │  From: Dr. XYZ (Shri XYZ Clinic)         │
+    │  ─────────────────────────────────────   │
+    │                                          │
+    │  Hello,                                  │
+    │                                          │
+    │  Your prescription document from         │
+    │  Shri XYZ Clinic is ready.               │
+    │                                          │
+    │  Please find your prescription PDF       │
+    │  attached to this message.               │
+    │                                          │
+    │  [📄 prescription_JohnDoe_VIS-XYZ789.pdf]│
+    │                                          │
+    │  For any clarification, please contact   │
+    │  the clinic.                             │
+    │                                          │
+    │  Thank you.                              │
+    │  Shri XYZ Clinic                         │
+    │                                          │
+    └──────────────────────────────────────────┘
+
+================================================================================
+PHONE NUMBER NORMALIZATION FLOW
+================================================================================
+
+Input Phone Number
+       │
+       ▼
+┌─────────────────┐
+│ Remove spaces,  │
+│ hyphens, ()     │
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│ Remove leading  │
+│ + if present    │
+└────────┬────────┘
+         │
+         ▼
+    Check format
+         │
+         ├─────────────────┬─────────────────┐
+         │                 │                 │
+         ▼                 ▼                 ▼
+   10 digits?        Starts with 91?    Already 12
+   9876543210        9198765432         digits with 91?
+         │                 │              919876543210
+         │                 │                 │
+         ▼                 ▼                 │
+    Add "91"          Validate              │
+    prefix            10 digits             │
+         │            after 91              │
+         │                 │                 │
+         └─────────┬───────┴─────────────────┘
+                   │
+                   ▼
+         ┌──────────────────┐
+         │  919876543210    │
+         │  (normalized)    │
+         └──────────────────┘
+
+================================================================================
+ERROR HANDLING FLOW
+================================================================================
+
+                    User Action
+                         │
+                         ▼
+                 ┌───────────────┐
+                 │ Click WhatsApp│
+                 │ Button        │
+                 └───────┬───────┘
+                         │
+        ┌────────────────┼────────────────┐
+        │                │                │
+        ▼                ▼                ▼
+┌──────────────┐ ┌──────────────┐ ┌──────────────┐
+│ No phone     │ │ Invalid      │ │ Valid phone  │
+│ number       │ │ phone        │ │ number       │
+└──────┬───────┘ └──────┬───────┘ └──────┬───────┘
+       │                │                │
+       ▼                ▼                ▼
+┌──────────────┐ ┌──────────────┐ ┌──────────────┐
+│ Show error:  │ │ Show error:  │ │ Show consent │
+│ "No mobile"  │ │ "Invalid"    │ │ dialog       │
+└──────┬───────┘ └──────┬───────┘ └──────┬───────┘
+       │                │                │
+       ▼                ▼                ├──────────┐
+   Button NOT      Button NOT           │          │
+   opening         opening              │          │
+   WhatsApp        WhatsApp         Cancel      Confirm
+                                        │          │
+                                        ▼          ▼
+                                    Do nothing  Open
+                                                WhatsApp
+
+================================================================================
+DATA FLOW DIAGRAM
+================================================================================
+
+Frontend (script.js)          Backend (app.py)          Database
+────────────────────          ────────────────          ────────
+
+Doctor Dashboard       ───────────────────────────────────────>
+                                                               │
+                       Generate Prescription                   │
+                       POST /generate-prescription             │
+                                                               │
+                       <─────────────────────────────────────  │
+                       JSON Response:                          │
+                       {                                       │
+                         patient: "John Doe",                  │
+                         patient_id: "PT-ABC123",              │
+                         phone_number: "+919876543210", ◄──────┘
+                         visit_id: "VIS-XYZ789",
+                         download_url: "...",
+                         drive_url: "..."
+                       }
+                              │
+                              │
+                              ▼
+                       Display Success with
+                       WhatsApp Button
+                              │
+                              │
+                       Doctor Clicks Button
+                              │
+                              │
+                              ▼
+                       Extract phone_number
+                       from JSON response
+                              │
+                              │
+                              ▼
+                       Normalize Phone
+                       919876543210
+                              │
+                              │
+                              ▼
+                       Generate WhatsApp URL
+                       https://wa.me/919876543210?text=...
+                              │
+                              │
+                              ▼
+                       window.open(whatsappURL)
+                              │
+                              │
+                              ▼
+                       WhatsApp Opens ────────────> wa.me (WhatsApp)
+                                                            │
+                                                            │
+                       Doctor attaches PDF <────────────────┘
+                       Doctor sends message
+
+================================================================================
+SECURITY CHECKPOINTS
+================================================================================
+
+┌─────────────────────────────────────────────────────────────────┐
+│                         SECURITY LAYER                          │
+└─────────────────────────────────────────────────────────────────┘
+
+1. Authentication Check
+   └─> Is user logged in as doctor? ──> NO ──> Redirect to login
+                                   └──> YES ──> Continue
+
+2. Authorization Check
+   └─> Does doctor have permission? ──> NO ──> Show error 403
+                                   └──> YES ──> Continue
+
+3. Patient Data Validation
+   └─> Is patient selected? ──> NO ──> Show error "Select patient"
+                          └──> YES ──> Continue
+
+4. Phone Number Validation
+   └─> Is phone valid? ──> NO ──> Show error "Invalid number"
+                     └──> YES ──> Continue
+
+5. Consent Confirmation
+   └─> Did doctor confirm? ──> NO ──> Stop (do nothing)
+                         └──> YES ──> Continue
+
+6. Data Sanitization
+   └─> Encode message with encodeURIComponent()
+   └─> No sensitive data in URL parameters
+
+7. User-Initiated Action
+   └─> Direct user click required (prevents CSRF)
+
+================================================================================

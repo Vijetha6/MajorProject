@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WhatsApp Integration Test</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      max-width: 600px;
+      margin: 50px auto;
+      padding: 20px;
+      background: #f5f7fb;
+    }
+    .test-container {
+      background: white;
+      padding: 30px;
+      border-radius: 12px;
+      box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+    }
+    h1 {
+      color: #333;
+      margin-bottom: 20px;
+    }
+    .test-case {
+      margin: 20px 0;
+      padding: 15px;
+      background: #f9fafb;
+      border-left: 4px solid #2563eb;
+      border-radius: 4px;
+    }
+    .test-case.pass {
+      border-left-color: #10b981;
+      background: #f0fdf4;
+    }
+    .test-case.fail {
+      border-left-color: #ef4444;
+      background: #fef2f2;
+    }
+    input, button {
+      padding: 10px;
+      margin: 10px 5px;
+      border-radius: 6px;
+      border: 1px solid #d1d5db;
+      font-size: 14px;
+    }
+    button {
+      background: #25D366;
+      color: white;
+      border: none;
+      cursor: pointer;
+      font-weight: 600;
+    }
+    button:hover {
+      background: #20BA5A;
+    }
+    .result {
+      margin-top: 10px;
+      padding: 10px;
+      background: #f3f4f6;
+      border-radius: 4px;
+      font-family: monospace;
+      font-size: 12px;
+    }
+  </style>
+</head>
+<body>
+  <div class="test-container">
+    <h1>WhatsApp Click-to-Chat Integration Test</h1>
+    
+    <h2>Phone Number Normalization Tests</h2>
+    <div id="testResults"></div>
+    
+    <h2>Manual Test</h2>
+    <div>
+      <label>Phone Number:</label><br>
+      <input type="text" id="testPhone" placeholder="Enter phone number" value="9876543210">
+      <button onclick="testManualPhone()">Test Normalization</button>
+      <button onclick="testWhatsAppLink()">Open WhatsApp</button>
+      <div id="manualResult" class="result"></div>
+    </div>
+  </div>
+
+  <script>
+    // Copy the normalization function from script.js
+    function normalizePhoneForWhatsApp(phoneNumber) {
+      if (!phoneNumber || typeof phoneNumber !== 'string') {
+        throw new Error('Invalid phone number provided.');
+      }
+
+      let cleaned = phoneNumber.trim().replace(/[\s\-\(\)]/g, '');
+      
+      if (cleaned.startsWith('+')) {
+        cleaned = cleaned.substring(1);
+      }
+      
+      if (cleaned.startsWith('91') && cleaned.length === 12) {
+        return cleaned;
+      }
+      
+      if (cleaned.length === 10 && /^\d{10}$/.test(cleaned)) {
+        return '91' + cleaned;
+      }
+      
+      if (cleaned.startsWith('91')) {
+        const number = cleaned.substring(2);
+        if (number.length === 10 && /^\d{10}$/.test(number)) {
+          return cleaned;
+        }
+      }
+      
+      throw new Error('Invalid Indian mobile number. Please use a valid 10-digit number.');
+    }
+
+    function generateWhatsAppURL(phoneNumber, message) {
+      const normalizedPhone = normalizePhoneForWhatsApp(phoneNumber);
+      const encodedMessage = encodeURIComponent(message);
+      return `https://wa.me/${normalizedPhone}?text=${encodedMessage}`;
+    }
+
+    // Test cases
+    const testCases = [
+      { input: '9876543210', expected: '919876543210', description: '10-digit number' },
+      { input: '+91 9876543210', expected: '919876543210', description: 'Number with +91 and space' },
+      { input: '919876543210', expected: '919876543210', description: 'Number already with 91' },
+      { input: '+919876543210', expected: '919876543210', description: 'Number with +91 no space' },
+      { input: '91-9876-543210', expected: '919876543210', description: 'Number with hyphens' },
+      { input: '+91 98765 43210', expected: '919876543210', description: 'Number with +91 and spaces' },
+      { input: '(91) 9876543210', expected: '919876543210', description: 'Number with brackets' },
+    ];
+
+    function runTests() {
+      const resultsDiv = document.getElementById('testResults');
+      resultsDiv.innerHTML = '';
+
+      testCases.forEach((test, index) => {
+        const testDiv = document.createElement('div');
+        testDiv.className = 'test-case';
+        
+        try {
+          const result = normalizePhoneForWhatsApp(test.input);
+          const passed = result === test.expected;
+          
+          testDiv.classList.add(passed ? 'pass' : 'fail');
+          testDiv.innerHTML = `
+            <strong>Test ${index + 1}: ${test.description}</strong><br>
+            Input: <code>${test.input}</code><br>
+            Expected: <code>${test.expected}</code><br>
+            Got: <code>${result}</code><br>
+            Status: <strong style="color: ${passed ? 'green' : 'red'}">${passed ? '✓ PASS' : '✗ FAIL'}</strong>
+          `;
+        } catch (error) {
+          testDiv.classList.add('fail');
+          testDiv.innerHTML = `
+            <strong>Test ${index + 1}: ${test.description}</strong><br>
+            Input: <code>${test.input}</code><br>
+            Error: <code>${error.message}</code><br>
+            Status: <strong style="color: red">✗ FAIL</strong>
+          `;
+        }
+        
+        resultsDiv.appendChild(testDiv);
+      });
+    }
+
+    function testManualPhone() {
+      const phone = document.getElementById('testPhone').value;
+      const resultDiv = document.getElementById('manualResult');
+      
+      try {
+        const normalized = normalizePhoneForWhatsApp(phone);
+        resultDiv.innerHTML = `
+          <strong>Input:</strong> ${phone}<br>
+          <strong>Normalized:</strong> ${normalized}<br>
+          <strong>Status:</strong> <span style="color: green">✓ Valid</span>
+        `;
+        resultDiv.style.background = '#f0fdf4';
+      } catch (error) {
+        resultDiv.innerHTML = `
+          <strong>Input:</strong> ${phone}<br>
+          <strong>Error:</strong> ${error.message}<br>
+          <strong>Status:</strong> <span style="color: red">✗ Invalid</span>
+        `;
+        resultDiv.style.background = '#fef2f2';
+      }
+    }
+
+    function testWhatsAppLink() {
+      const phone = document.getElementById('testPhone').value;
+      const message = `Hello,\n\nYour prescription document from Shri XYZ Clinic is ready.\n\nPlease find your prescription PDF attached to this message.\n\nFor any clarification, please contact the clinic.\n\nThank you.\n\nShri XYZ Clinic`;
+      
+      try {
+        const url = generateWhatsAppURL(phone, message);
+        console.log('WhatsApp URL:', url);
+        window.open(url, '_blank', 'noopener,noreferrer');
+      } catch (error) {
+        alert(`Error: ${error.message}`);
+      }
+    }
+
+    // Run tests on page load
+    window.addEventListener('DOMContentLoaded', runTests);
+  </script>
+</body>
+</html>
